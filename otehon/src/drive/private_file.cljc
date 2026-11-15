@@ -1,7 +1,8 @@
 (ns drive.private-file
   "Bounded user-side file and metadata envelope. The trusted host owns
    identity, dango policy, signed basis admission, consent and delivery."
-  (:require [awai.browser-chunk-envelope :as envelope]))
+  (:require [awai.browser-chunk-envelope :as envelope]
+            [awai.browser-recipient-chunks :as recipient-chunks]))
 
 (def max-header 16384)
 (def max-frame (* envelope/chunk-bytes envelope/max-chunks))
@@ -14,6 +15,37 @@
        (string? (:mime m)) (<= (count (:mime m)) 256)
        (js/Number.isSafeInteger (:modified m))
        (js/Number.isSafeInteger (:size m)) (<= 0 (:size m) max-frame)))
+
+(defn prepare-passkey-seal!
+  "Prepare a selected File and recipient proof. The trusted host displays
+   owner, file and recipients, then invokes :confirm! from a direct gesture.
+   The File is read locally only after the Passkey proof succeeds."
+  [host file-id file nonce pub pq-pub presentation others]
+  (when-not (and (map? host) (text? (:owner host) 256) (text? (:resource host) 256)
+                 (map? (:recipient-host host)) (text? file-id 128) (instance? js/File file)
+                 (vector? others) (every? map? others)) (refuse))
+  (let [ids (conj (set (map :holder others)) (get-in host [:recipient-host :holder]))
+        metadata {:schema "awai.drive/private-file-v1" :id file-id :owner (:owner host)
+                  :name (.-name file) :mime (.-type file) :modified (.-lastModified file) :size (.-size file)}
+        header (.encode (js/TextEncoder.) (js/JSON.stringify (clj->js metadata)))
+        header-size (.-length header) total (+ 4 header-size (:size metadata))]
+    (.fill header 0)
+    (when-not (and (= (count ids) (inc (count others))) (contains? ids (:owner host))
+                   (metadata? metadata) (<= 1 header-size max-header) (<= total max-frame)) (refuse))
+    (let [load! (fn []
+                  (-> (.arrayBuffer file)
+                      (.then (fn [buffer]
+                        (let [bytes (js/Uint8Array. buffer) frame (js/Uint8Array. total)
+                              h (.encode (js/TextEncoder.) (js/JSON.stringify (clj->js metadata)))]
+                          (try
+                            (when-not (and (= (:size metadata) (.-length bytes)) (= header-size (.-length h))) (refuse))
+                            (.setUint32 (js/DataView. (.-buffer frame)) 0 header-size false)
+                            (.set frame h 4) (.set frame bytes (+ 4 header-size))
+                            (mapv (fn [start] (.slice frame start (min total (+ start envelope/chunk-bytes))))
+                                  (range 0 total envelope/chunk-bytes))
+                            (finally (.fill h 0) (.fill frame 0) (.fill bytes 0))))))))]
+      (-> (recipient-chunks/prepare! (assoc host :load! load!) nonce pub pq-pub presentation others)
+          (.then (fn [prepared] (when-not (= ids (set (:recipients prepared))) (refuse)) prepared))))))
 
 (defn seal-file!
   "Accept a user-selected File, encrypt content and metadata together. host's
