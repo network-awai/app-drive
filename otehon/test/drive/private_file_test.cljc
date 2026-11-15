@@ -15,7 +15,7 @@
 (def data (js/Uint8Array. (+ chunks/chunk-bytes 3)))
 (.fill data 42)
 (def file (js/File. #js [data] "秘密の報告.txt" #js {:type "text/plain" :lastModified 12345}))
-(def empty-file (js/File. #js [] "empty.txt" #js {:lastModified 0}))
+(def empty-file (js/File. #js [] "empty.txt" #js {:lastModified -12345}))
 (-> (keys/fingerprint keypair)
     (.then (fn [fp]
       (let [p {:roots #{(ed/public-key seed)} :revoked #{} :fresh-until 150 :bindings {owner fp}}
@@ -36,7 +36,8 @@
                     (js/Promise.all
                       #js [(-> (drive/seal-file! host "opaque-file-id" empty-file [recipient])
                                (.then (fn [o] (drive/open-file! admit o expected owner identity)))
-                               (.then (fn [x] (check (= 0 (.-length (:bytes x)))))))
+                               (.then (fn [x] (check (= 0 (.-length (:bytes x))))
+                                                (check (= -12345 (get-in x [:metadata :modified]))))))
                            (denied #(drive/seal-file! host "opaque-file-id" file []))
                            (denied #(drive/seal-file! (assoc host :policy! (fn [] (assoc p :fresh-until 100))) "opaque-file-id" file [recipient]))
                            (denied #(drive/open-file! {:admit! (fn [_ _] true)} sealed (assoc expected :id "wrong") owner identity))

@@ -12,7 +12,7 @@
        (= "awai.drive/private-file-v1" (:schema m))
        (text? (:id m) 128) (text? (:owner m) 256) (text? (:name m) 1024)
        (string? (:mime m)) (<= (count (:mime m)) 256)
-       (js/Number.isSafeInteger (:modified m)) (<= 0 (:modified m))
+       (js/Number.isSafeInteger (:modified m))
        (js/Number.isSafeInteger (:size m)) (<= 0 (:size m) max-frame)))
 
 (defn seal-file!
