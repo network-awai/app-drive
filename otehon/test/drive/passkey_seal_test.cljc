@@ -46,7 +46,7 @@
             _ (aset file "arrayBuffer" (fn [] (check (= 1 @calls)) (swap! reads inc) (.call original-read file)))
             host {:recipient-host recipient-host :request! request! :resource resource :now! clock :owner sender
                   :policy! (fn [] {:roots #{(ed/public-key seed)} :revoked #{} :fresh-until 150
-                                    :bindings {sender (:recipient-key sender-key)}})}
+                                    :bindings {holder (:recipient-key identity) sender (:recipient-key sender-key)}})}
             nonce (edge/b64url->bytes (:nonce issued))]
         (-> (denied #(drive/prepare-passkey-seal! (assoc host :owner "wrong") "file-1" file nonce (:pub identity) (:pq-pub identity) presentation others))
             (.then (fn [_] (check (zero? @reads)) (check (zero? @calls))
