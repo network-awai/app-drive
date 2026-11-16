@@ -29,7 +29,7 @@
             client {:put-block! (fn [cid bytes auth] (check (= auth "Biscuit synthetic"))
                                   (swap! writes inc) (swap! saved assoc cid (clone bytes)) (js/Promise.resolve cid))
                     :get-block (fn [cid] (js/Promise.resolve (some-> (get @saved cid) clone)))}
-            host {:owner owner :resource resource :delivery-current! #(deref current)
+            host {:owner owner :resource resource :delivery-current! #(deref current) :delivery-current-async! (fn [] (js/Promise.resolve @current))
                   :delivery-fingerprints! #(deref fingerprints)
                   :admit-cid! (fn [cid basis] (and (= @admitted cid) (= expected basis)))
                   :authorization! (fn [_] (js/Promise.resolve "Biscuit synthetic"))
