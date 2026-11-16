@@ -1,6 +1,7 @@
 (ns drive.otehon-delivery-host
   "Trusted local host for encrypted file delivery."
   (:require [awai.otehon-delivery-host :as delivery]
+            [awai.browser-dango-snapshot :as dango-snapshot]
             [awai.browser-block-authorization :as authorization]
             [awai.kotobase-block-adapter :as blocks]
             [drive.private-file :as file]))
@@ -31,3 +32,11 @@
                      allow-loopback-for-tests?)]
     {:host (assoc bound :authorization! authorize!)
      :client (client! audience broker get-selector put-selector signal allow-loopback-for-tests?)}))
+
+(defn bind-snapshot! [host db credential-id holder trust snapshot]
+  (-> (dango-snapshot/bind-host! host trust snapshot)
+      (.then (fn [verified] (bind! verified db credential-id holder)))))
+
+(defn approved-snapshot-delivery! [host db credential-id holder trust snapshot options]
+  (-> (dango-snapshot/bind-host! host trust snapshot)
+      (.then (fn [verified] (approved-delivery! verified db credential-id holder options)))))
