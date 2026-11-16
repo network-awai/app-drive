@@ -1,5 +1,5 @@
 (ns drive.passkey-seal-test
-  (:require ["node:crypto" :as crypto] ["node:fs" :as fs] ["node:path" :as path]
+  (:require ["node:crypto" :as crypto] ["node:fs" :as fs] ["node:path" :as path] ["node:http" :as http]
             [drive.private-file :as drive] [drive.otehon-delivery-host :as delivery]
             [awai.browser-chunk-blocks :as blocks]
             [awai.passkey-store :as store] [awai.recipient-proof-store :as persisted] [awai.otehon-passkey :as otehon]
@@ -15,8 +15,25 @@
 (persisted/initialize! db)
 (def resource "kotoba://storage/browser-recipient")
 (def seed (vec (repeat 32 3)))
-(-> (js/Promise.all #js [(virtual/create! "awai.network") (keys/generate-identity) (keys/generate-identity)])
-    (.then (fn [[auth identity sender-key]]
+(def stored (atom {})) (def writes (atom 0)) (def operations (atom []))
+(def server (http/createServer
+  (fn [req res]
+    (let [path (.-url req)]
+      (if-not (re-matches #"/private-ipld/b[a-z2-7]+" path)
+        (do (.writeHead res 404) (.end res))
+        (if (= "PUT" (.-method req))
+          (let [parts (atom [])]
+            (.on req "data" #(swap! parts conj %))
+            (.on req "end" (fn []
+              (check (= "Biscuit synthetic" (aget (.-headers req) "authorization")))
+              (swap! stored assoc path (js/Buffer.concat (clj->js @parts))) (swap! writes inc)
+              (.writeHead res 201) (.end res))))
+          (if-let [bytes (and (= "GET" (.-method req)) (get @stored path))]
+            (.end res bytes) (do (.writeHead res 404) (.end res)))))))))
+(def peer (js/Promise. (fn [resolve reject] (.once server "error" reject)
+  (.listen server 0 "127.0.0.1" #(resolve (str "http://127.0.0.1:" (.-port (.address server))))))))
+(-> (js/Promise.all #js [(virtual/create! "awai.network") (keys/generate-identity) (keys/generate-identity) peer])
+    (.then (fn [[auth identity sender-key origin]]
       (let [pub (edge/bytes->b64 (:public-key auth)) holder (otehon/account-did pub)
             _ (store/enroll-trusted! db {:credential-id (:credential-id auth) :public-key-b64 pub
                                          :holder holder :fingerprint (:recipient-key identity) :sign-count 0})
@@ -45,7 +62,7 @@
             file (js/File. #js [(js/Uint8Array. 4194304) (.encode (js/TextEncoder.) "private")] "private.txt")
             original-read (.-arrayBuffer file)
             _ (aset file "arrayBuffer" (fn [] (check (= 1 @calls)) (swap! reads inc) (.call original-read file)))
-            revoked (atom #{}) stored (atom {}) allowed (atom nil) writes (atom 0)
+            revoked (atom #{}) allowed (atom nil) before-denial (atom nil)
             expected {:resource resource :recipients #{holder sender} :owner sender :id "file-1"}
             metadata {:schema "awai.drive/private-file-v1" :id "file-1" :owner sender :name (.-name file)
                       :mime (.-type file) :modified (.-lastModified file) :size (.-size file)}
@@ -62,9 +79,11 @@
                     :admit! (fn [basis _] (= expected basis))
                     :authorization! (fn [_] (js/Promise.resolve "Biscuit synthetic"))}
                    db (:credential-id auth) holder)
-            client {:put-block! (fn [cid bytes authz] (check (= authz "Biscuit synthetic"))
-                                  (swap! writes inc) (swap! stored assoc cid (js/Uint8Array.from bytes)) (js/Promise.resolve cid))
-                    :get-block (fn [cid] (js/Promise.resolve (some-> (get @stored cid) js/Uint8Array.from)))}
+            controller (js/AbortController.)
+            broker #js {:invoke (fn [selector request options]
+                      (swap! operations conj [(.-operation selector) (.. request -init -method)])
+                      (js/fetch (.-input request) (js/Object.assign #js {:redirect "error" :signal (.-signal options)} (.-init request))))}
+            client (delivery/client! origin broker #js {:operation "get"} #js {:operation "put"} (.-signal controller) true)
             nonce (edge/b64url->bytes (:nonce issued))]
         (-> (denied #(drive/prepare-passkey-seal! (assoc host :owner "wrong") "file-1" file nonce (:pub identity) (:pq-pub identity) presentation others))
             (.then (fn [_] (check (zero? @reads)) (check (zero? @calls))
@@ -77,16 +96,20 @@
                     (.then (fn [sealed] (reset! allowed (:cid (blocks/pack sealed)))
                       (drive/publish! host client sealed expected)))
                     (.then (fn [cid] (check (> @writes 1))
+                      (check (every? #(not (.includes % (js/Buffer.from "private"))) (vals @stored)))
                       (drive/receive! host client cid expected holder identity)))
                     (.then (fn [result] (check (= "private.txt" (get-in result [:metadata :name])))
                       (check (= "private" (.decode (js/TextDecoder.) (.slice (:bytes result) 4194304))))
                       (.fill (:bytes result) 0) (check (= 1 @reads))
+                      (check (and (some #(= ["put" "PUT"] %) @operations) (some #(= ["get" "GET"] %) @operations)))
+                      (reset! before-denial (count @operations))
                       (let [decision (dango/verify presentation {:roots #{(ed/public-key seed)} :revoked #{}
                            :request {:req/kind :data/read :req/resource resource :req/holder holder :req/now 100 :req/bytes byte-count}})]
                         (reset! revoked #{(first (:dango/cids decision))}))
                       (denied #(drive/receive! host client @allowed expected holder identity))))
                     (.then (fn [_] (reset! revoked #{}) (check (store/revoke! db (:credential-id auth)))
                       (denied #(drive/receive! host client @allowed expected holder identity))))
-                    (.then (fn [_] (denied #((:confirm! prepared)))))))))))))
-    (.then (fn [_] (.close db) (println (js/JSON.stringify #js {:passed true :scope "synthetic Drive File with recipient Passkey proof"}))))
-    (.catch (fn [e] (.close db) (js/console.error e) (set! (.-exitCode js/process) 1))))
+                    (.then (fn [_] (check (= @before-denial (count @operations))) (.abort controller)
+                      (denied #((:confirm! prepared)))))))))))))
+    (.then (fn [_] (.close server) (.close db) (println (js/JSON.stringify #js {:passed true :scope "Drive virtual Passkey and loopback Kotobase delivery"}))))
+    (.catch (fn [e] (.close server) (.close db) (js/console.error e) (set! (.-exitCode js/process) 1))))
