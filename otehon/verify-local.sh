@@ -9,7 +9,7 @@ apex=$(cd "$1" && pwd -P)
 kotoba=$(cd "$2" && pwd -P)
 kbb=$(cd "$3" && pwd -P)
 root=$(CDPATH='' cd "$(dirname "$0")/.." && pwd -P)
-[ "$(git -C "$apex" rev-parse HEAD)" = 202af347fa7e343b14c6bf69d39bfb11e450d0b0 ]
+[ "$(git -C "$apex" rev-parse HEAD)" = 3a868a631ae71b7d85aabf98f97216bf0d322b94 ]
 [ "$(git -C "$kbb" rev-parse HEAD)" = 1675e6aab65d5a99e37840cc5012bc2eca6f4a07 ]
 git -C "$apex" diff --quiet
 git -C "$apex" diff --cached --quiet
@@ -31,9 +31,12 @@ cp "$root/otehon/test/drive/local_revocation_host_test.cljc" "$out/test-src/driv
 cp "$root/otehon/test/drive/async_delivery_test.cljc" "$out/test-src/drive/async_delivery_test.cljs"
 cp "$root/otehon/test/drive/snapshot_host_test.cljc" "$out/test-src/drive/snapshot_host_test.cljs"
 cp "$root/otehon/test/drive/browser_delivery_host_test.cljc" "$out/test-src/drive/browser_delivery_host_test.cljs"
+cp "$root/otehon/test/drive/browser_local_delivery_test.cljc" "$out/test-src/drive/browser_local_delivery_test.cljs"
 cd "$out/deps"
 node "$kbb/cli.js" -cp "$out/dango:$out/envelope:$apex/otehon/owner-store/lib:$root/otehon/src:$out/test-src" \
   -e '(require (quote drive.browser-delivery-host-test))'
+node "$kbb/cli.js" -cp "$out/dango:$out/envelope:$apex/otehon/owner-store/lib:$root/otehon/src:$out/test-src" \
+  -e '(require (quote drive.browser-local-delivery-test))'
 node "$kbb/cli.js" -cp "$out/dango:$out/envelope:$apex/otehon/owner-store/lib:$root/otehon/src:$out/test-src" \
   -e '(require (quote drive.snapshot-host-test))'
 node "$kbb/cli.js" -cp "$out/dango:$out/envelope:$apex/otehon/owner-store/lib:$root/otehon/src:$out/test-src" \
