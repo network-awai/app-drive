@@ -3,6 +3,7 @@
    identity, dango policy, signed basis admission, consent and delivery."
   (:require [awai.browser-chunk-envelope :as envelope]
             [awai.browser-recipient-chunks :as recipient-chunks]
+            [awai.delivery-key-binding :as key-binding]
             [awai.browser-chunk-blocks :as blocks]))
 
 (def max-header 16384)
@@ -123,18 +124,26 @@
                  (= (:resource host) (:resource expected))
                  (= (:resource expected) (get-in object [:envelope :envelope/id]))
                  (= (:recipients expected) (set (map :recipient/id (get-in object [:envelope :envelope/recipients]))))) (refuse))
-  (let [cid (:cid (blocks/pack object))]
-    (blocks/publish! (current-host host cid expected) client object)))
+  (-> (key-binding/verify! host object expected)
+      (.then (fn [bindings]
+               (let [guarded (key-binding/guarded-host host expected bindings)
+                     cid (:cid (blocks/pack object))]
+                 (blocks/publish! (current-host guarded cid expected) client object))))))
 
 (defn receive!
   "Fetch a host-authenticated manifest and its CID-verified blocks, then open
    while rechecking the host's file basis and current delivery authority."
   [host client cid expected recipient identity]
   (when-not (and (expected? expected) (map? host) (fn? (:admit! host))) (refuse))
-  (let [scoped (current-host host cid expected)]
+  (let [bindings (key-binding/capture! host expected)
+        guarded (key-binding/guarded-host host expected bindings)
+        scoped (current-host guarded cid expected)]
     (-> (blocks/receive! scoped client cid (select-keys expected [:resource :recipients]))
         (.then (fn [object]
-                 (open-file! (assoc host :admit! (fn [basis candidate]
-                               (and (true? ((:current! scoped)))
-                                    (true? ((:admit! host) basis candidate)))))
-                             object expected recipient identity))))))
+                 (-> (key-binding/verify! guarded object expected)
+                     (.then (fn [actual]
+                       (when-not (= bindings actual) (refuse))
+                       (open-file! (assoc host :admit! (fn [basis candidate]
+                                     (and (true? ((:current! scoped)))
+                                          (true? ((:admit! host) basis candidate)))))
+                                   object expected recipient identity)))))))))
