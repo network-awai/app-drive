@@ -144,7 +144,10 @@
                  (-> (key-binding/verify! guarded object expected)
                      (.then (fn [actual]
                        (when-not (= bindings actual) (refuse))
-                       (open-file! (assoc host :admit! (fn [basis candidate]
-                                     (and (true? ((:current! scoped)))
-                                          (true? ((:admit! host) basis candidate)))))
-                                   object expected recipient identity)))))))))
+                       (async-authority/guard-open!
+                         (fn [] (-> ((:delivery-current-async! guarded))
+                                    (.then (fn [ok] (and (true? ok) (true? ((:current! scoped))))))))
+                         (fn [] (open-file! (assoc host :admit! (fn [basis candidate]
+                                       (and (true? ((:current! scoped)))
+                                            (true? ((:admit! host) basis candidate)))))
+                                     object expected recipient identity)))))))))))

@@ -63,6 +63,11 @@
                     (.then (fn [_] (reset! current true)
                       (let [calls (atom 0) changing (assoc host :admit! (fn [_ _] (= 1 (swap! calls inc))))]
                         (denied #(drive/receive! changing client cid expected owner identity)))))
+                    (.then (fn [_] (let [live (atom true) opened (atom false)
+                                           racing (assoc host :delivery-current-async! (fn [] (js/Promise.resolve @live))
+                                                              :admit! (fn [basis _] (reset! opened true) (reset! live false) (= expected basis)))]
+                                      (-> (denied #(drive/receive! racing client cid expected owner identity))
+                                          (.then (fn [_] (check @opened)))))))
                     (.then (fn [_] (let [part (:cid (first blocks)) bytes (clone (get @saved part))]
                                       (aset bytes 0 (bit-xor 1 (aget bytes 0))) (swap! saved assoc part bytes)
                                       (denied #(drive/receive! host client cid expected owner identity)))))
