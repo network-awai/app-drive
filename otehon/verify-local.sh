@@ -9,13 +9,14 @@ apex=$(cd "$1" && pwd -P)
 kotoba=$(cd "$2" && pwd -P)
 kbb=$(cd "$3" && pwd -P)
 root=$(CDPATH='' cd "$(dirname "$0")/.." && pwd -P)
-[ "$(git -C "$apex" rev-parse HEAD)" = 9c7c68898ca9c806884df19a52801213b4d5bdb5 ]
+[ "$(git -C "$apex" rev-parse HEAD)" = 4830419852e81f29beced23477ed3fa92a4123d1 ]
 [ "$(git -C "$kbb" rev-parse HEAD)" = 1675e6aab65d5a99e37840cc5012bc2eca6f4a07 ]
 git -C "$apex" diff --quiet
 git -C "$apex" diff --cached --quiet
 git -C "$kbb" diff --quiet
 git -C "$kbb" diff --cached --quiet
 git -C "$kotoba" cat-file -e 'b7d31a1ee3aafdb4c33dd9f7d6b94ae423393b64^{commit}'
+git -C "$kotoba" cat-file -e 'b2ae9f9fa598bc1b9a7462b68f93571af8540570^{commit}'
 mkdir -p "$root/.agent-output/.agent-output"
 out=$(mktemp -d "$root/.agent-output/drive-check.XXXXXX")
 mkdir -p "$out/deps" "$out/test-src/drive"
@@ -26,7 +27,10 @@ node "$apex/otehon/owner-store/stage-dango.mjs" "$kotoba" "$out/dango"
 cp "$root/otehon/test/drive/private_file_test.cljc" "$out/test-src/drive/private_file_test.cljs"
 cp "$root/otehon/test/drive/private_file_delivery_test.cljc" "$out/test-src/drive/private_file_delivery_test.cljs"
 cp "$root/otehon/test/drive/passkey_seal_test.cljc" "$out/test-src/drive/passkey_seal_test.cljs"
+cp "$root/otehon/test/drive/local_revocation_host_test.cljc" "$out/test-src/drive/local_revocation_host_test.cljs"
 cd "$out/deps"
+node "$kbb/cli.js" -cp "$out/dango:$out/envelope:$apex/otehon/owner-store/lib:$root/otehon/src:$out/test-src" \
+  -e '(require (quote drive.local-revocation-host-test))'
 node "$kbb/cli.js" -cp "$out/dango:$out/envelope:$apex/otehon/owner-store/lib:$root/otehon/src:$out/test-src" \
   -e '(require (quote drive.private-file-test))'
 node "$kbb/cli.js" -cp "$out/dango:$out/envelope:$apex/otehon/owner-store/lib:$root/otehon/src:$out/test-src" \

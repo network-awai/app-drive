@@ -9,7 +9,7 @@
   "Bind local Passkey and dango checks. The caller authenticates the policy,
    signed basis, recipient grants and complete encrypted-frame byte count."
   [host db credential-id holder]
-  (delivery/bind! host db credential-id holder file/max-frame))
+  (delivery/bind-local-revocations! host db credential-id holder file/max-frame (:local-revocation-scope host)))
 
 (defn client!
   "Construct the ciphertext client with the host's broker and abort signal.
