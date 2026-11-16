@@ -1,6 +1,7 @@
 (ns drive.passkey-seal-test
   (:require ["node:crypto" :as crypto] ["node:fs" :as fs] ["node:path" :as path]
-            [drive.private-file :as drive]
+            [drive.private-file :as drive] [drive.otehon-delivery-host :as delivery]
+            [awai.browser-chunk-blocks :as blocks]
             [awai.passkey-store :as store] [awai.recipient-proof-store :as persisted] [awai.otehon-passkey :as otehon]
             [dango.chain :as dango] [ed25519.sign :as ed] [envelope.keystore :as keys] [envelope.seal :as seal]
             [webauthn.adapters.edge :as edge] [webauthn.virtual-authenticator :as virtual]))
@@ -44,9 +45,26 @@
             file (js/File. #js [(js/Uint8Array. 4194304) (.encode (js/TextEncoder.) "private")] "private.txt")
             original-read (.-arrayBuffer file)
             _ (aset file "arrayBuffer" (fn [] (check (= 1 @calls)) (swap! reads inc) (.call original-read file)))
-            host {:recipient-host recipient-host :request! request! :resource resource :now! clock :owner sender
-                  :policy! (fn [] {:roots #{(ed/public-key seed)} :revoked #{} :fresh-until 150
-                                    :bindings {holder (:recipient-key identity) sender (:recipient-key sender-key)}})}
+            revoked (atom #{}) stored (atom {}) allowed (atom nil) writes (atom 0)
+            expected {:resource resource :recipients #{holder sender} :owner sender :id "file-1"}
+            metadata {:schema "awai.drive/private-file-v1" :id "file-1" :owner sender :name (.-name file)
+                      :mime (.-type file) :modified (.-lastModified file) :size (.-size file)}
+            byte-count (+ 4 (.-size file) (.-length (.encode (js/TextEncoder.) (js/JSON.stringify (clj->js metadata)))))
+            host (delivery/bind!
+                   {:recipient-host recipient-host :request! request! :resource resource :now! clock :owner sender
+                    :policy! (fn [] {:roots #{(ed/public-key seed)} :revoked @revoked :fresh-until 150
+                                     :bindings {holder (:recipient-key identity) sender (:recipient-key sender-key)}})
+                    :delivery-grants! (fn [] {:byte-count byte-count :recipients
+                      [{:holder holder :presentation presentation :fingerprint (:recipient-key identity)}
+                       {:holder sender :presentation sender-presentation :fingerprint (:recipient-key sender-key)}]})
+                    :delivery-current! (fn [] true)
+                    :admit-cid! (fn [cid basis] (and (= cid @allowed) (= expected basis)))
+                    :admit! (fn [basis _] (= expected basis))
+                    :authorization! (fn [_] (js/Promise.resolve "Biscuit synthetic"))}
+                   db (:credential-id auth) holder)
+            client {:put-block! (fn [cid bytes authz] (check (= authz "Biscuit synthetic"))
+                                  (swap! writes inc) (swap! stored assoc cid (js/Uint8Array.from bytes)) (js/Promise.resolve cid))
+                    :get-block (fn [cid] (js/Promise.resolve (some-> (get @stored cid) js/Uint8Array.from)))}
             nonce (edge/b64url->bytes (:nonce issued))]
         (-> (denied #(drive/prepare-passkey-seal! (assoc host :owner "wrong") "file-1" file nonce (:pub identity) (:pq-pub identity) presentation others))
             (.then (fn [_] (check (zero? @reads)) (check (zero? @calls))
@@ -56,15 +74,19 @@
               (let [pending ((:confirm! prepared))]
                 (check (= 1 @calls))
                 (-> pending
-                    (.then (fn [sealed]
-                      (js/Promise.all #js [(drive/open-file! {:admit! (fn [_ _] true)} sealed
-                                             {:resource resource :recipients #{holder sender} :owner sender :id "file-1"} holder identity)
-                                           (drive/open-file! {:admit! (fn [_ _] true)} sealed
-                                             {:resource resource :recipients #{holder sender} :owner sender :id "file-1"} sender sender-key)])))
-                    (.then (fn [opened] (doseq [result (array-seq opened)]
-                                          (check (= "private.txt" (get-in result [:metadata :name])))
-                                          (check (= "private" (.decode (js/TextDecoder.) (.slice (:bytes result) 4194304)))) (.fill (:bytes result) 0))
-                             (check (= 1 @reads))
-                             (denied #((:confirm! prepared)))))))))))))
+                    (.then (fn [sealed] (reset! allowed (:cid (blocks/pack sealed)))
+                      (drive/publish! host client sealed expected)))
+                    (.then (fn [cid] (check (> @writes 1))
+                      (drive/receive! host client cid expected holder identity)))
+                    (.then (fn [result] (check (= "private.txt" (get-in result [:metadata :name])))
+                      (check (= "private" (.decode (js/TextDecoder.) (.slice (:bytes result) 4194304))))
+                      (.fill (:bytes result) 0) (check (= 1 @reads))
+                      (let [decision (dango/verify presentation {:roots #{(ed/public-key seed)} :revoked #{}
+                           :request {:req/kind :data/read :req/resource resource :req/holder holder :req/now 100 :req/bytes byte-count}})]
+                        (reset! revoked #{(first (:dango/cids decision))}))
+                      (denied #(drive/receive! host client @allowed expected holder identity))))
+                    (.then (fn [_] (reset! revoked #{}) (check (store/revoke! db (:credential-id auth)))
+                      (denied #(drive/receive! host client @allowed expected holder identity))))
+                    (.then (fn [_] (denied #((:confirm! prepared)))))))))))))
     (.then (fn [_] (.close db) (println (js/JSON.stringify #js {:passed true :scope "synthetic Drive File with recipient Passkey proof"}))))
     (.catch (fn [e] (.close db) (js/console.error e) (set! (.-exitCode js/process) 1))))
