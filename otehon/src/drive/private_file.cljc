@@ -2,12 +2,19 @@
   "Bounded user-side file and metadata envelope. The trusted host owns
    identity, dango policy, signed basis admission, consent and delivery."
   (:require [awai.browser-chunk-envelope :as envelope]
-            [awai.browser-recipient-chunks :as recipient-chunks]))
+            [awai.browser-recipient-chunks :as recipient-chunks]
+            [awai.browser-chunk-blocks :as blocks]))
 
 (def max-header 16384)
 (def max-frame (* envelope/chunk-bytes envelope/max-chunks))
 (defn refuse [] (throw (ex-info "private file refused" {})))
 (defn text? [x n] (and (string? x) (<= 1 (count x) n)))
+(defn- expected? [expected]
+  (and (map? expected) (= #{:resource :recipients :owner :id} (set (keys expected)))
+       (text? (:resource expected) 256) (set? (:recipients expected))
+       (<= 1 (count (:recipients expected)) 32) (every? #(text? % 256) (:recipients expected))
+       (text? (:owner expected) 256) (contains? (:recipients expected) (:owner expected))
+       (text? (:id expected) 128)))
 (defn metadata? [m]
   (and (map? m) (= #{:schema :id :owner :name :mime :modified :size} (set (keys m)))
        (= "awai.drive/private-file-v1" (:schema m))
@@ -80,9 +87,7 @@
    expected resource, recipient set, owner and file id. Returns metadata and
    bytes; the caller owns and must clear the returned byte buffer."
   [host object expected recipient identity]
-  (when-not (and (map? host) (fn? (:admit! host)) (map? expected)
-                 (= #{:resource :recipients :owner :id} (set (keys expected)))
-                 (text? (:id expected) 128) (text? (:owner expected) 256)) (refuse))
+  (when-not (and (map? host) (fn? (:admit! host)) (expected? expected)) (refuse))
   (let [admit! (:admit! host)
         scoped (assoc host :admit! (fn [_ candidate] (admit! expected candidate)))]
     (-> (envelope/open scoped object (select-keys expected [:resource :recipients]) recipient identity)
@@ -101,3 +106,35 @@
                                  (= (:owner expected) (:owner metadata)) (= (:size metadata) (- total end))) (refuse))
                   {:metadata metadata :bytes (.slice frame end)}))
               (finally (.fill frame 0) (doseq [part parts] (.fill part 0))))))))))
+
+(defn- current-host [host cid expected]
+  (when-not (and (map? host) (fn? (:delivery-current! host)) (fn? (:admit-cid! host))) (refuse))
+  {:current! (fn [] (and (true? ((:delivery-current! host)))
+                         (true? ((:admit-cid! host) cid expected))))
+   :authorization! (:authorization! host)
+   :admit-packed! (fn [actual] (= cid actual))})
+
+(defn publish!
+  "Publish only a sealed file whose manifest CID and complete basis the trusted
+   host admits. The client, service consent and revocation signal remain owned
+   by the runtime; already delivered blocks cannot be recalled."
+  [host client object expected]
+  (when-not (and (expected? expected) (= (:owner host) (:owner expected))
+                 (= (:resource host) (:resource expected))
+                 (= (:resource expected) (get-in object [:envelope :envelope/id]))
+                 (= (:recipients expected) (set (map :recipient/id (get-in object [:envelope :envelope/recipients]))))) (refuse))
+  (let [cid (:cid (blocks/pack object))]
+    (blocks/publish! (current-host host cid expected) client object)))
+
+(defn receive!
+  "Fetch a host-authenticated manifest and its CID-verified blocks, then open
+   while rechecking the host's file basis and current delivery authority."
+  [host client cid expected recipient identity]
+  (when-not (and (expected? expected) (map? host) (fn? (:admit! host))) (refuse))
+  (let [scoped (current-host host cid expected)]
+    (-> (blocks/receive! scoped client cid (select-keys expected [:resource :recipients]))
+        (.then (fn [object]
+                 (open-file! (assoc host :admit! (fn [basis candidate]
+                               (and (true? ((:current! scoped)))
+                                    (true? ((:admit! host) basis candidate)))))
+                             object expected recipient identity))))))
