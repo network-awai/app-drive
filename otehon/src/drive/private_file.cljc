@@ -4,6 +4,7 @@
   (:require [awai.browser-chunk-envelope :as envelope]
             [awai.browser-recipient-chunks :as recipient-chunks]
             [awai.delivery-key-binding :as key-binding]
+            [awai.browser-async-authority :as async-authority]
             [awai.browser-chunk-blocks :as blocks]))
 
 (def max-header 16384)
@@ -128,7 +129,7 @@
       (.then (fn [bindings]
                (let [guarded (key-binding/guarded-host host expected bindings)
                      cid (:cid (blocks/pack object))]
-                 (blocks/publish! (current-host guarded cid expected) client object))))))
+                 (blocks/publish! (current-host guarded cid expected) (async-authority/client-for-host guarded client) object))))))
 
 (defn receive!
   "Fetch a host-authenticated manifest and its CID-verified blocks, then open
@@ -138,7 +139,7 @@
   (let [bindings (key-binding/capture! host expected)
         guarded (key-binding/guarded-host host expected bindings)
         scoped (current-host guarded cid expected)]
-    (-> (blocks/receive! scoped client cid (select-keys expected [:resource :recipients]))
+    (-> (blocks/receive! scoped (async-authority/client-for-host guarded client) cid (select-keys expected [:resource :recipients]))
         (.then (fn [object]
                  (-> (key-binding/verify! guarded object expected)
                      (.then (fn [actual]
