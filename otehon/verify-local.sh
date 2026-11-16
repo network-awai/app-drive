@@ -9,7 +9,7 @@ apex=$(cd "$1" && pwd -P)
 kotoba=$(cd "$2" && pwd -P)
 kbb=$(cd "$3" && pwd -P)
 root=$(CDPATH='' cd "$(dirname "$0")/.." && pwd -P)
-[ "$(git -C "$apex" rev-parse HEAD)" = 9d4d3a0d1da07c0096e59327fa4b44a49c168223 ]
+[ "$(git -C "$apex" rev-parse HEAD)" = 9adc626f886568b499c24cd1ec93bf2f4dfcbf59 ]
 [ "$(git -C "$kbb" rev-parse HEAD)" = 1675e6aab65d5a99e37840cc5012bc2eca6f4a07 ]
 git -C "$apex" diff --quiet
 git -C "$apex" diff --cached --quiet
