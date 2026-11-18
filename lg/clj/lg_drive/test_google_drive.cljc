@@ -63,6 +63,36 @@
                    ""]]
       (is (= 400 (:status (get-metadata st endpoint {"q" query}))) query))))
 
+(deftest drive-v3-file-types
+  (let [st (store/fake-store)
+        folder (get (handlers/files-create st {"name" "Media" "isFolder" true}) "fileId")
+        _ (doseq [[name mime] [["Trip 01" "image/jpeg"] ["Trip 02" "image/png"]
+                               ["Trip 03" "video/mp4"] ["Trip 04" "audio/mpeg"]
+                               ["Trip 05" "application/pdf"] ["Other" "image/jpeg"]]]
+            (handlers/files-create st {"name" name "mimeType" mime "parentId" folder}))
+        _ (handlers/files-create st {"name" "Outside" "mimeType" "image/jpeg"})
+        query {"q" (str "'" folder "' in parents and name contains 'Trip' and mimeType contains 'image/'")
+               "fields" "files(name,mimeType),nextPageToken" "pageSize" "1"}
+        page (:json (get-metadata st endpoint query))
+        token (get page "nextPageToken")
+        next-page (:json (get-metadata st endpoint (assoc query "pageToken" token)))
+        names (fn [q] (mapv #(get % "name")
+                           (get-in (get-metadata st endpoint {"q" q "fields" "files(name)"})
+                                   [:json "files"])))]
+    (is (= [{"name" "Trip 01" "mimeType" "image/jpeg"}] (get page "files")))
+    (is (= {"files" [{"name" "Trip 02" "mimeType" "image/png"}]} next-page))
+    (is (= ["Trip 02"] (names "mimeType = 'image/png'")))
+    (is (= ["Trip 03"] (names "mimeType contains 'video/'")))
+    (is (= ["Trip 04"] (names "mimeType contains 'audio/'")))
+    (is (= ["Trip 05"] (names "mimeType contains 'application/pdf'")))
+    (is (= ["Media"] (names "mimeType = 'application/vnd.google-apps.folder'")))
+    (is (= ["Trip 01" "Trip 02" "Trip 04" "Trip 05"]
+           (names "name contains 'Trip' and mimeType != 'video/mp4'")))
+    (is (= ["Trip 01"] (names "name = 'Trip 01'")))
+    (is (= 400 (:status (get-metadata st endpoint
+                          (assoc query "q" "mimeType contains 'video/'" "pageToken" token)))))
+    (is (= 400 (:status (get-metadata st endpoint {"q" "mimeTypecontains 'image/'"}))))))
+
 (deftest drive-v3-host-boundary
   (let [st (store/fake-store)
         request {:request-method :get :uri endpoint :query-string "fields=files%28id%29"}

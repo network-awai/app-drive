@@ -7,4 +7,4 @@
       #js {"newRecord" encrypted/new-record "sealSnapshot" encrypted/seal-snapshot
            "openSnapshot" encrypted/open-snapshot "sha256" encrypted/sha})
 (aset js/window "AwaiDriveWnfs"
-      #js {"seal" wnfs/seal "open" wnfs/open "openSnapshot" wnfs/open-snapshot "project" query/project "snapshotLimit" wnfs/snapshot-limit})
+      #js {"seal" wnfs/seal "open" wnfs/open "catalog" wnfs/catalog "openSnapshot" wnfs/open-snapshot "project" query/project "snapshotLimit" wnfs/snapshot-limit})

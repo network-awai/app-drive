@@ -37,6 +37,23 @@ until its WNFS admission has been qualified. WNFS restore creates a verified
 copy in a new folder. Local eviction is disabled in this profile because
 immediate remote readback does not prove durable retention.
 
+## Search stored files
+
+On Android with encrypted storage configured, choose **Cloud** under **Search
+in** to search all paths in the latest verified snapshot available to the
+device's owner key. Both legacy and WNFS snapshots work with their configured
+profile. The app reads the encrypted packs using the existing approval dialog
+for each GET, checks the hashes and opens the metadata on-device. Query text,
+file names and the derived list stay in app memory. WNFS currently downloads
+the encrypted data packs to traverse the stored tree. Search does not publish,
+restore or modify a snapshot. The existing restore action is used to open a
+cloud-only file.
+
+Local and cloud search filter by name and by images, videos, audio, documents
+or folders. The app uses filename extensions for file categories. The separate
+Drive v3 metadata service uses stored MIME types for `mimeType contains`,
+`mimeType =` and `mimeType !=` predicates in `files.list` queries.
+
 ## Safety and integration
 
 - Upload completion requires an explicit receipt plus separately approved full

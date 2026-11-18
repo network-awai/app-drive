@@ -89,29 +89,64 @@
                                   (when (> (.-length bytes) pack-limit) (refuse))
                                   #js {:root root :bytes bytes :files (clj->js @files) :owner (:recipient-key owner)})))
                        (.finally #(wipe! opened)))))))))
-(defn open-snapshot [record secret root pack]
+(defn- with-snapshot-manifest [record secret root pack use-manifest]
   (when (> (.-length pack) pack-limit) (refuse))
-  (let [{:keys [roots blocks]} (car/carv1-decode (vec pack)) objects (atom {})
+  (let [{:keys [roots blocks]} (car/carv1-decode (vec pack))
+        objects (atom {})
         expected (car/cid-bytes car/codec-raw (unhex root))]
     (when-not (and (= [expected] roots) (<= 1 (count blocks) 4096)) (refuse))
-    (-> (sequence! blocks (fn [{:keys [cid bytes]}]
-                            (let [data (u8 bytes) parsed (car/parse-cid cid) id (hex (:digest parsed))]
-                              (when (or (not= car/codec-raw (:codec parsed)) (contains? @objects id)) (refuse))
-                              (-> (sha data) (.then (fn [h] (when-not (= h id) (refuse)) (swap! objects assoc id data)))))))
+    (-> (sequence! blocks
+                   (fn [{:keys [cid bytes]}]
+                     (let [data (u8 bytes) parsed (car/parse-cid cid) id (hex (:digest parsed))]
+                       (when (or (not= car/codec-raw (:codec parsed)) (contains? @objects id)) (refuse))
+                       (-> (sha data)
+                           (.then (fn [h]
+                                    (when-not (= h id) (refuse))
+                                    (swap! objects assoc id data)))))))
         (.then (fn [_] (keys/open-record (edn/read-string record) secret)))
         (.then (fn [identity]
                  (-> (open-object @objects root identity)
-                     (.then (fn [b]
-                              (let [m (edn/read-string (text b)) rows (:files m) out (array) total (atom 0)]
-                                (when-not (and (= :awai.owner/private-manifest-v1 (:schema m)) (= (:recipient-key identity) (:owner m))
-                                               (vector? rows) (<= (count rows) 1000) (= (count rows) (count (set (map :name rows))))) (refuse))
-                                (-> (sequence! rows
-                                      (fn [r] (when-not (and (d/valid-path? (:name r)) (seq (:name r))
-                                                            (js/Number.isSafeInteger (:size r)) (<= 0 (:size r) limit)) (refuse))
-                                        (when (> (swap! total + (:size r)) limit) (refuse))
-                                        (-> (open-object @objects (:object r) identity)
-                                            (.then (fn [b] (when-not (= (:size r) (.-length b)) (refuse))
-                                                     (-> (sha b) (.then (fn [h] (when-not (= h (:sha r)) (refuse))
-                                                                         (.push out #js {:path (:name r) :bytes b :sha256 h})))))))))
-                                    (.then (fn [_] (let [dirs (or (:drive/directories m) [])] (when-not (and (vector? dirs) (<= (count dirs) 1000) (every? #(and (d/valid-path? %) (seq %)) dirs)) (refuse)) (aset out "directories" (clj->js dirs)) out)))))))
+                     (.then (fn [plain]
+                              (let [manifest (try
+                                               (edn/read-string (text plain))
+                                               (finally (.fill plain 0)))
+                                    rows (:files manifest)
+                                    dirs (or (:drive/directories manifest) [])]
+                                (when-not (and (= :awai.owner/private-manifest-v1 (:schema manifest))
+                                               (= (:recipient-key identity) (:owner manifest))
+                                               (vector? rows) (<= (count rows) 1000)
+                                               (= (count rows) (count (set (map :name rows))))
+                                               (every? (fn [{:keys [name size object]}]
+                                                         (and (d/valid-path? name) (seq name)
+                                                              (js/Number.isSafeInteger size) (<= 0 size limit)
+                                                              (contains? @objects object)))
+                                                       rows)
+                                               (<= (reduce + (map :size rows)) limit)
+                                               (vector? dirs) (<= (count dirs) 1000)
+                                               (every? #(and (d/valid-path? %) (seq %)) dirs))
+                                  (refuse))
+                                (use-manifest rows dirs @objects identity))))
                      (.finally #(wipe! identity))))))))
+
+(defn snapshot-catalog [record secret root pack]
+  (with-snapshot-manifest record secret root pack
+    (fn [rows dirs _ _]
+      (into-array (concat (map (fn [path] #js {:path path :directory true}) dirs)
+                          (map (fn [{:keys [name size]}] #js {:path name :bytes size}) rows))))))
+
+(defn open-snapshot [record secret root pack]
+  (with-snapshot-manifest record secret root pack
+    (fn [rows dirs objects identity]
+      (let [out (array)]
+        (-> (sequence! rows
+                       (fn [row]
+                         (-> (open-object objects (:object row) identity)
+                             (.then (fn [bytes]
+                                      (when-not (= (:size row) (.-length bytes)) (refuse))
+                                      (-> (sha bytes)
+                                          (.then (fn [digest]
+                                                   (when-not (= digest (:sha row)) (refuse))
+                                                   (.push out #js {:path (:name row) :bytes bytes :sha256 digest})))))))))
+            (.then (fn [_]
+                     (aset out "directories" (clj->js dirs))
+                     out)))))))

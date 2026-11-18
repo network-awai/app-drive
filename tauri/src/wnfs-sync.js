@@ -124,6 +124,7 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
       }
     },
 
+    catalog: session => readSnapshot(session, 'catalog'),
     async restore(session) {
       const snapshot = await readSnapshot(session, 'open', 'txt');
       // The production worker returns basis and query results with the

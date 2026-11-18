@@ -3,7 +3,7 @@ bind_native(document.documentElement,{tonal:'.tonal,.secondary',text:'#files but
 import*as encryptedSync from'./sync.js';
 import './core.js';
 import {translator,messages} from './i18n.js';
-import {searchFiles} from './search.js';
+import {searchFiles,searchCatalog} from './search.js';
 const {lang,t,bytes}=translator(navigator.language);document.documentElement.lang=lang;document.querySelectorAll('[data-i18n]').forEach(n=>n.textContent=t(n.dataset.i18n));document.querySelectorAll('[data-i18n-aria]').forEach(n=>n.setAttribute('aria-label',t(n.dataset.i18nAria)));
 import {createHost} from './host.js';
 import {clientRuntimeProblems,createClientConsentHost,createClientOperationBroker} from './runtime.js';
@@ -14,23 +14,32 @@ const core=window.AwaiDriveCore,$=id=>document.getElementById(id),host=createHos
 
 function message(s){$('status').textContent=s;}
 async function call(op,extra={}){if(!core.validPath(parent))throw Error('invalid-path');return window.__TAURI__.core.invoke('drive_call',{request:{op,parent,...extra}});}
-function fail(e){const s=String(e?.message||e);const label=t(Object.keys(messages[lang]).find(key=>key.startsWith('error.')&&s.includes(key.slice(6)))||'error.unknown');message(label);if($('edit').open)$('form-error').textContent=label;}
-function renderEntries(entries, showLocation = false) {
+function fail(e) {
+  const reason = String(e?.message || e);
+  const key = reason === 'client operation was not approved' ? 'error.operation-denied' :
+    Object.keys(messages[lang]).find(key => key.startsWith('error.') && reason.includes(key.slice(6)));
+  const label = t(key || 'error.unknown');
+  message(label);
+  if ($('edit').open) $('form-error').textContent = label;
+}
+function renderEntries(entries, showLocation = false, cloud = false) {
   const rows = document.createDocumentFragment();
   for (const item of entries) {
     const row = document.createElement('li');
-    const button = document.createElement('button');
+    const content = document.createElement(cloud ? 'div' : 'button');
     const label = document.createElement('span');
     const caption = document.createElement('small');
     label.textContent = (item.directory ? '▸ ' : '') + item.name;
-    caption.textContent = item.directory ? t('folder.caption') : t('file.caption', { size: bytes(item.bytes) });
-    button.append(label, caption);
+    caption.textContent = cloud ? t(item.directory ? 'search.cloud.folder' : 'search.cloud.file') :
+      item.directory ? t('folder.caption') : t('file.caption', { size: bytes(item.bytes) });
+    content.append(label, caption);
     if (showLocation) {
       const location = document.createElement('small');
-      location.textContent = item.path.split('/').slice(0, -1).join('/') || t('storage.root');
-      button.append(location);
+      location.textContent = item.path.split('/').slice(0, -1).join('/') || t(cloud ? 'search.cloud' : 'storage.root');
+      content.append(location);
     }
-    button.onclick = () => task(async () => {
+    if (cloud) content.className = 'cloud-entry';
+    else content.onclick = () => task(async () => {
       if (item.directory) {
         parent = item.path;
         await list();
@@ -39,7 +48,7 @@ function renderEntries(entries, showLocation = false) {
         await call('open', { path: item.path });
       }
     });
-    row.append(button);
+    row.append(content);
     rows.append(row);
   }
   $('files').replaceChildren(rows);
@@ -48,7 +57,8 @@ function renderEntries(entries, showLocation = false) {
 async function list() {
   const { entries } = await call('list');
   $('search-heading').hidden = true;
-  $('search-query').value = '';
+  $('search-cloud-help').hidden = true;
+  $('search-form').reset();
   $('path').closest('nav').hidden = false;
   $('import').closest('section').hidden = false;
   $('path').textContent = parent || t('storage.root');
@@ -61,19 +71,22 @@ async function list() {
   $('storage').textContent = t(syncState.synced ? 'sync.ready' : syncState.evicted ? 'sync.evicted' : encryptedSync.configured ? 'sync.dirty' : 'storage.state');
 }
 
-async function showSearch(query) {
+async function showSearch(query, kind, cloud) {
   $('path').closest('nav').hidden = true;
   $('import').closest('section').hidden = true;
-  $('search-heading').textContent = t('search.heading', { query });
+  $('search-heading').textContent = t(query ? 'search.heading' : 'search.results', { query });
   $('search-heading').hidden = false;
+  $('search-cloud-help').hidden = true;
   renderEntries([]);
-  message(t('search.running'));
+  message(t(cloud ? 'search.cloud.running' : 'search.running'));
   const input = $('search-query');
   input.readOnly = true;
   try {
-    const { entries, limited } = await searchFiles(query, async folder =>
-      (await call('list', { parent: folder })).entries);
-    renderEntries(entries, true);
+    const { entries, limited } = cloud
+      ? searchCatalog(query, kind, await encryptedSync.cloudCatalog())
+      : await searchFiles(query, async folder => (await call('list', { parent: folder })).entries, kind);
+    renderEntries(entries, true, cloud);
+    $('search-cloud-help').hidden = !cloud;
     const key = limited ? 'search.limited' : entries.length ? 'search.count' : 'search.empty';
     message(t(key, { count: new Intl.NumberFormat(lang).format(entries.length) }));
   } finally {
@@ -81,11 +94,13 @@ async function showSearch(query) {
   }
 }
 
-async function task(fn){if(busy)return;busy=true;document.querySelectorAll('main button,#edit button').forEach(x=>x.disabled=true);try{await fn();}catch(e){fail(e);}finally{busy=false;document.querySelectorAll('main button,#edit button').forEach(x=>x.disabled=false);}}
+async function task(fn){if(busy)return;busy=true;document.querySelectorAll('main button, .drive-search select, #edit button').forEach(x=>x.disabled=true);try{await fn();}catch(e){fail(e);}finally{busy=false;document.querySelectorAll('main button, .drive-search select, #edit button').forEach(x=>x.disabled=false);}}
 $('search-form').onsubmit = event => {
   event.preventDefault();
   const query = $('search-query').value.trim();
-  task(query ? () => showSearch(query) : list);
+  const kind = $('search-kind').value;
+  const cloud = encryptedSync.configured && $('search-scope').value === 'cloud';
+  task(cloud || query || kind !== 'all' ? () => showSearch(query, kind, cloud) : list);
 };
 $('search-clear').onclick = () => task(async () => {
   $('search-query').focus();
@@ -112,3 +127,4 @@ $('evict').onclick=()=>{$('evict-confirm').showModal();};
 $('evict-cancel').onclick=()=>$('evict-confirm').close();
 $('evict-allow').onclick=()=>{$('evict-confirm').close();task(async()=>{await encryptedSync.evict();parent='';await list();$('storage').textContent=t('sync.evicted');});};
 if(!encryptedSync.configured){$('sync').hidden=true;$('restore').hidden=true;$('evict').hidden=true;}
+else $('search-scope-field').hidden = false;

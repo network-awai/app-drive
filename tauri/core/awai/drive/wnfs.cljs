@@ -205,7 +205,7 @@
         (.then (fn [capsule]
                  #js {:capsule capsule :packs (make-packs store (:forest sealed)) :basis (.toString (:forest sealed))})))))
 
-(defn open-snapshot [record secret root capsule packs]
+(defn- read-snapshot [record secret root capsule packs metadata-only?]
   (-> (open-capsule record secret root capsule)
       (.then (fn [{:keys [forest access]}]
                (let [store (read-packs packs forest)
@@ -224,16 +224,25 @@
                                      (path-parts child)
                                      (visit (node/parse-ref ref (aget (.-entries body) name)) child (inc depth)))))
                                "wnfs/priv/file"
-                               (let [chunks (array)]
-                                 (node/stream-file store loaded entry
-                                   (fn [part]
-                                     (let [data (blocks/u8 part)]
-                                       (when (> (swap! total + (.-length data)) snapshot-limit) (refuse))
-                                       (.push chunks data))))
-                                 (.push rows #js {:path path :chunks chunks}))
+                               (if metadata-only?
+                                 (.push rows #js {:path path})
+                                 (let [chunks (array)]
+                                   (node/stream-file store loaded entry
+                                     (fn [part]
+                                       (let [data (blocks/u8 part)]
+                                         (when (> (swap! total + (.-length data)) snapshot-limit) (refuse))
+                                         (.push chunks data))))
+                                   (.push rows #js {:path path :chunks chunks})))
                                (refuse))))]
                    (visit access "" 0)
                    #js {:rows rows :basis (.toString forest)}))))))
+
+(defn open-snapshot [record secret root capsule packs]
+  (read-snapshot record secret root capsule packs false))
+
+(defn catalog [record secret root capsule packs]
+  (-> (read-snapshot record secret root capsule packs true)
+      (.then (fn [snapshot] (.-rows snapshot)))))
 
 (defn open [record secret root capsule packs]
   (-> (open-snapshot record secret root capsule packs)
