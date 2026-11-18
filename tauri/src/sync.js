@@ -1,8 +1,10 @@
 import { createDrivePackClient } from './drive-packs.mjs';
 import './core.js';
+import {createDriveAccountLink} from './account-link.js';
+import {discoverAccountHeads} from './account-heads.js';
 import { createWnfsSync } from './wnfs-sync.js';
 import{createClientConsentHost,createClientOperationBroker}from'./runtime.js';
-import{runtimeFor}from'./sync-contract.js';import{syncOrigin,receiptKeys,wnfsEnabled}from'./sync-config.js';import{verifyDrivePackReceipt}from'./receipt.js';
+import{runtimeFor}from'./sync-contract.js';import{syncOrigin,receiptKeys,wnfsEnabled,accountLinkEnabled}from'./sync-config.js';import{verifyDrivePackReceipt}from'./receipt.js';
 const core=window.AwaiDriveEncrypted;
 const b64=b=>{let s='';for(let i=0;i<b.length;i+=16384)s+=String.fromCharCode(...b.subarray(i,i+16384));return btoa(s);};
 const unb64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
@@ -77,4 +79,31 @@ export const restoreSharedSnapshot = grant => sharing(owner => wnfs.restoreShare
 export async function catalogAuthorizedAccount(grant) {
   if (!configured || !wnfsEnabled) throw Error('recovery-required');
   return wnfs.catalogAuthorizedAccount(grant);
+}
+
+
+// Only an authenticated host may provide the discovery callback and issuer key.
+export async function catalogVerifiedRecipientHeads({requestHeads, issuerKey}) {
+  if (!configured || !wnfsEnabled || !accountLinkEnabled) throw Error('recovery-required');
+  const link = createDriveAccountLink({call: invoke});
+  const account = await link.linkedAccount();
+  if (!account) throw Error('invalid-account-snapshot-grant');
+  const device = await link.linkedDevice();
+  const saved = await invoke('vaultSession', {initialize: false});
+  if (!saved.initialized || !saved.record) throw Error('recovery-required');
+  const secret = unb64(saved.secret);
+  try {
+    const reader = {record: saved.record, secret};
+    const recipient = await wnfs.publicRecipient(reader);
+    const headList = await discoverAccountHeads({
+      requestHeads, issuerKey, subject: account.accountDid, device, recipient: recipient.id,
+    });
+    const current = await link.linkedAccount();
+    if (current?.accountDid !== account.accountDid) throw Error('invalid-account-snapshot-grant');
+    return await wnfs.catalogAccountRecipients(reader, headList, () => {
+      if (Date.now() >= headList.expires) throw Error('invalid-account-heads');
+    });
+  } finally {
+    secret.fill(0);
+  }
 }

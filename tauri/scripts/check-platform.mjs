@@ -6,6 +6,7 @@ const pins = JSON.parse(await readFile(new URL('PINS.json', vendor), 'utf8'));
 const expected = {
   ...pins.awaiOs.files,
   ...pins.yataverse.files,
+  ...pins.accountLink.files,
   'kotoba-client-runtime.js': pins.runtime,
 };
 

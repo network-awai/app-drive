@@ -1,6 +1,12 @@
 export const PACK_LIMIT=12*1024*1024;
-export function runtimeFor(origin='',wnfs=false){
- const operations=[];
+export const accountOperation = {
+  capability: 'awai.drive.account', service: 'awai-relay', operation: 'await-phone-approval',
+  consent: 'each-operation', 'data-categories': ['link-topic', 'encrypted-link-approval'],
+  endpoint: {origin: 'https://relay.awai.network',
+    routes: [{method: 'GET', path: '/:topic/json', 'query-params': []}]}
+};
+export function runtimeFor(origin='',wnfs=false,accountLink=false){
+ const operations=accountLink ? [accountOperation] : [];
  if(origin){const u=new URL(origin);if(u.protocol!=='https:'||u.origin!==origin||u.username||u.password)throw Error('invalid-sync-origin');
  for(const [operation,method] of [['upload','PUT'],['download','GET']])operations.push({capability:'awai.drive.sync',service:'awai.fs',operation,endpoint:{origin,routes:[{method,'path-prefix':'/awai-drive/v1/packs/','query-params':[]}]},'data-categories':['encrypted-files','encrypted-metadata','opaque-pack-id'],consent:'each-operation'});}
  return {schema:'kotoba.app.client-runtime.v1',target:'browser',profile:'trusted-page-v1',entry:'index.html','local-state':{adapter:'memory',schema:'awai.drive.view.v1',version:1},workers:wnfs?[{id:"drive-wnfs",entry:"wnfs-worker.js",protocol:"awai.drive.wnfs.worker.v1"}]:[],operations};

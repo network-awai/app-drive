@@ -72,26 +72,66 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
     }
   }
 
-  async function readSnapshot(session, operation, extension) {
+  async function readSnapshot(session, operation, extension, guard) {
     const head = session.wnfs;
     validateHead(head);
     const started = performance.now();
+    guard?.();
     const capsule = await packs.download(head.capsule);
     if (capsule.length > 262144) throw Error('invalid-wnfs-snapshot');
     const capsuleBytes = capsule.length;
     const data = [];
     let size = 0;
     for (const id of head.packs) {
+      guard?.();
       const pack = await packs.download(id);
       size += pack.length;
       if (size > 4 * PACK_BYTES) throw Error('invalid-wnfs-snapshot');
       data.push(pack);
     }
+    guard?.();
     const fetched = performance.now();
     const snapshot = await compute(operation, session, { root: head.root, capsule, packs: data, extension },
       [capsule.buffer, ...data.map(pack => pack.buffer)]);
+    guard?.();
     if (Array.isArray(snapshot)) return snapshot;
     return { ...snapshot, fetchMs: fetched - started, openMs: performance.now() - fetched, bytes: size + capsuleBytes };
+  }
+
+  // The owner host supplies these grants after authenticating the account,
+  // confirming device authorization and binding the stored heads to it.
+  async function catalogAuthorizedAccount({ subject, sources }, guard) {
+    if (typeof subject !== 'string' || !SUBJECT.test(subject) || !Array.isArray(sources) ||
+        sources.length > MAX_ACCOUNT_SOURCES) throw Error('invalid-account-snapshot-grant');
+    const deviceIds = new Set();
+    for (const source of sources) {
+      if (source?.subject !== subject || typeof source.deviceId !== 'string' || !DEVICE_ID.test(source.deviceId) ||
+          deviceIds.has(source.deviceId) || typeof source.basis !== 'string' || !BASIS_ID.test(source.basis) ||
+          typeof source.owner?.record !== 'string' || !source.owner.record || source.owner.record.length > 16000 ||
+          !(source.owner.secret instanceof Uint8Array) || source.owner.secret.length !== 32) {
+        throw Error('invalid-account-snapshot-grant');
+      }
+      validateHead(source.owner.wnfs);
+      deviceIds.add(source.deviceId);
+    }
+    const entries = [];
+    const admitted = sources.map(({ owner, deviceId, basis }) => ({
+      deviceId, basis,
+      owner: { record: owner.record, secret: owner.secret.slice(),
+        wnfs: { ...owner.wnfs, packs: [...owner.wnfs.packs] } }
+    }));
+    try {
+      for (const { owner, deviceId, basis } of admitted) {
+        const catalog = await readSnapshot(owner, 'catalog', undefined, guard);
+        if (catalog.basis !== basis) throw Error('snapshot-basis-mismatch');
+        for (const { path, directory = false } of catalog.rows) {
+          entries.push({ path, directory, sourceDevice: deviceId });
+        }
+      }
+      return entries;
+    } finally {
+      for (const { owner } of admitted) owner.secret.fill(0);
+    }
   }
 
   return {
@@ -165,41 +205,23 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
       return rows;
     },
 
-    // The owner host supplies these grants after authenticating the account,
-    // confirming device authorization and binding the stored heads to it.
-    async catalogAuthorizedAccount({ subject, sources }) {
-      if (typeof subject !== 'string' || !SUBJECT.test(subject) || !Array.isArray(sources) ||
-          sources.length > MAX_ACCOUNT_SOURCES) throw Error('invalid-account-snapshot-grant');
-      const deviceIds = new Set();
-      for (const source of sources) {
-        if (source?.subject !== subject || typeof source.deviceId !== 'string' || !DEVICE_ID.test(source.deviceId) ||
-            deviceIds.has(source.deviceId) || typeof source.basis !== 'string' || !BASIS_ID.test(source.basis) ||
-            typeof source.owner?.record !== 'string' || !source.owner.record || source.owner.record.length > 16000 ||
-            !(source.owner.secret instanceof Uint8Array) || source.owner.secret.length !== 32) {
-          throw Error('invalid-account-snapshot-grant');
-        }
-        validateHead(source.owner.wnfs);
-        deviceIds.add(source.deviceId);
+    catalogAuthorizedAccount,
+    async catalogAccountRecipients(session, {subject, sources}, guard) {
+      if (!Array.isArray(sources) || sources.length > MAX_ACCOUNT_SOURCES) {
+        throw Error('invalid-account-snapshot-grant');
       }
-      const entries = [];
-      const admitted = sources.map(({ owner, deviceId, basis }) => ({
-        deviceId, basis,
-        owner: { record: owner.record, secret: owner.secret.slice(),
-          wnfs: { ...owner.wnfs, packs: [...owner.wnfs.packs] } }
-      }));
-      try {
-        for (const { owner, deviceId, basis } of admitted) {
-          const catalog = await readSnapshot(owner, 'catalog');
-          if (catalog.basis !== basis) throw Error('snapshot-basis-mismatch');
-          for (const { path, directory = false } of catalog.rows) {
-            entries.push({ path, directory, sourceDevice: deviceId });
-          }
+      const recipient = await compute('public-recipient', session, {}, []);
+      const admitted = sources.map(source => {
+        const grant = source?.grant;
+        if (grant?.schema !== 'awai.drive.wnfs.grant.v1' || grant.recipient !== recipient.id) {
+          throw Error('invalid-snapshot-grant');
         }
-        return entries;
-      } finally {
-        for (const { owner } of admitted) owner.secret.fill(0);
-      }
+        return {subject: source.subject, deviceId: source.deviceId, basis: grant.basis,
+          owner: {record: session.record, secret: session.secret, wnfs: grant.head}};
+      });
+      return catalogAuthorizedAccount({subject, sources: admitted}, guard);
     },
+
     async restore(session) {
       const snapshot = await readSnapshot(session, 'open', 'txt');
       // The production worker returns basis and query results with the

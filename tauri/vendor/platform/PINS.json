@@ -128,5 +128,15 @@
         "sha256": "ea0937fa99f8d8efe0f6ca1c047c876126df78ea04b03c28cfc03d68cdfa733b"
       }
     }
+  },
+  "accountLink": {
+    "repository": "https://github.com/network-awai/awai-os",
+    "revision": "43655bbec5b162108dce246520adda64ebbcbf08",
+    "files": {
+      "account-link-core.js": {
+        "path": "otehon/shell/src/identity/link.js",
+        "sha256": "eecc31e6bd6606881cd6c944ae486e9c74ae0ca636eb198fc92aaa0f879d8105"
+      }
+    }
   }
 }

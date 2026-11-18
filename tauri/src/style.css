@@ -86,3 +86,8 @@ main .actions { gap: .5rem; flex-direction: row; align-items: center; }
 main details { margin-block-start: 1rem; color: var(--awai-muted); }
 #edit, #evict-confirm { padding: 1.25rem; background: var(--awai-surface); color: var(--awai-text); border-color: var(--awai-border); }
 @media (hover: hover) { main #files button.awai-button:hover { background: var(--awai-container); } }
+
+.drive-account { margin-block: 1rem; overflow-wrap: anywhere; }
+.drive-account h2 { font-size: 1.125rem; margin: 0; }
+#account-request { margin-block-start: .75rem; }
+#account-request input { margin-block: .375rem .5rem; }
