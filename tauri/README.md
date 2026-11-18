@@ -11,15 +11,31 @@ build-pinned HTTPS storage endpoint, it can encrypt using the existing Kotoba
 hybrid envelope, sync an AwaiFS owner-store/CAR snapshot, retain files offline,
 and restore an emptied cache using device-protected keys and a trusted root.
 
-**Encrypted snapshots currently admit 8 MiB total and 1,000 entries.** Ordinary local
+**Legacy encrypted snapshots admit 8 MiB total and 1,000 entries.** Ordinary local
 import admits 1 GiB, but larger files stay unsynced and cannot be evicted. This
 is a bounded snapshot adapter, not WNFS private-tree or streamed large-file sync.
 It creates a device-local recipient, not an Awai account/Passkey enrollment.
 Uninstalling/clearing app data or losing device keys can make remote snapshots
 unreadable. Keep original data; independent owner recovery is not implemented.
 See [encryption, custody and transport boundaries](docs/encrypted-sync.md).
-The proposed [WNFS migration](docs/scalable-sync-design.md) replaces the bounded
-snapshot path with PrivateForest and CARv1. It carries forward [Awai OS PR #250](https://github.com/network-awai/awai-os/pull/250).
+The [WNFS migration](docs/scalable-sync-design.md) adds a copy-only Android
+profile with a WNFS PrivateForest and multiple CARv1 packs. It preserves the
+legacy snapshot head and owner key. Enable it for a validated HTTPS storage
+origin using `AWAI_DRIVE_WNFS_SYNC=1` and `AWAI_DRIVE_SYNC_ORIGIN`.
+Set `AWAI_DRIVE_WNFS_SOURCE` to the absolute path of an authorized
+network-awai-apex Git checkout containing the pinned revision. The build
+checks each upstream file hash. WNFS source and compiled WNFS bundles stay
+outside Git. Each
+pack stays within the existing 12 MiB transport cap. This browser profile
+admits 32 MiB of plaintext and 1,000 paths per snapshot. Its worker holds
+bounded arrays while the streaming large-snapshot path is developed.
+
+A WNFS endpoint must admit and verify both BLAKE3 WNFS blocks and SHA-256
+owner-capsule blocks. The existing Yataverse Drive endpoint's CID validator
+only admits SHA-256, so keep the default legacy profile with that service
+until its WNFS admission has been qualified. WNFS restore creates a verified
+copy in a new folder. Local eviction is disabled in this profile because
+immediate remote readback does not prove durable retention.
 
 ## Safety and integration
 

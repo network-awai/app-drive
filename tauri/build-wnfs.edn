@@ -1,0 +1,6 @@
+{:target :bundle
+ :output-to ".build/drive-wnfs-cljs-bundle/core.cjs"
+ :output-dir ".build/drive-wnfs-cljs"
+ :infer-externs true
+ :externs ["scripts/wnfs-externs.js"]
+ :language-out :ecmascript-2020}

@@ -1,0 +1,116 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { runInThisContext } from 'node:vm';
+
+globalThis.window = globalThis;
+const wnfsEnabled = process.env.AWAI_DRIVE_WNFS_SYNC === '1';
+if (wnfsEnabled) runInThisContext(await readFile(new URL('../generated/wnfs-core.js', import.meta.url), 'utf8'));
+
+const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+
+test('WNFS copy snapshot carries more than 8 MiB across bounded CAR packs and retains v1 readback', { skip: !wnfsEnabled }, async () => {
+  const { AwaiDriveEncrypted: legacy, AwaiDriveWnfs: wnfs } = globalThis;
+  const unlock = crypto.getRandomValues(new Uint8Array(32));
+  const identity = await legacy.newRecord(unlock);
+  const old = [{ path: 'existing.txt', bytes: new Uint8Array([1, 2, 3]) }];
+  const previous = await legacy.sealSnapshot(identity, unlock, old);
+  const image = new Uint8Array(9 * 1024 * 1024 + 17).fill(25);
+  const video = new Uint8Array(10 * 1024 * 1024 + 29).fill(91);
+  const rows = [
+    ...old,
+    { path: 'photos', directory: true },
+    { path: 'photos/test.jpg', bytes: image },
+    { path: 'test.mp4', bytes: video },
+    { path: 'empty', directory: true }
+  ];
+
+  const { capsule, packs } = await wnfs.seal(identity, unlock, rows);
+  assert.ok(packs.length > 1);
+  assert.ok(packs.every(bytes => bytes.length <= 12 * 1024 * 1024));
+  const restored = await wnfs.open(identity, unlock, capsule.root, capsule.bytes, packs);
+  const byPath = new Map(restored.map(row => [row.path, row]));
+  assert.equal(byPath.size, rows.length);
+  for (const row of rows) {
+    const restoredRow = byPath.get(row.path);
+    if (row.directory) {
+      assert.equal(restoredRow.directory, true);
+    } else {
+      const digest = createHash('sha256');
+      for (const chunk of restoredRow.chunks) digest.update(chunk);
+      assert.equal(digest.digest('hex'), sha(row.bytes));
+    }
+  }
+
+  const wrong = unlock.slice();
+  wrong[0] ^= 1;
+  await assert.rejects(wnfs.open(identity, wrong, capsule.root, capsule.bytes, packs));
+  await assert.rejects(wnfs.open(identity, unlock, capsule.root, capsule.bytes, packs.slice(1)));
+  const torn = packs[0].slice();
+  torn[torn.length - 1] ^= 1;
+  await assert.rejects(wnfs.open(identity, unlock, capsule.root, capsule.bytes, [torn, ...packs.slice(1)]));
+  const prior = await legacy.openSnapshot(identity, unlock, previous.root, previous.bytes);
+  assert.deepEqual(prior[0].bytes, old[0].bytes);
+  unlock.fill(0);
+});
+
+test('Drive only commits WNFS after all readbacks, and restores into a staged copy', async () => {
+  const { createWnfsSync } = await import('../src/wnfs-sync.js');
+  const { createDrivePackClient } = await import('../vendor/platform/drive-packs.mjs');
+  const origin = 'https://storage.example';
+  const bytes = Uint8Array.of(7, 8, 9);
+  const media = { path: 'media.mp4', size: bytes.length, sha256: sha(bytes), directory: false };
+  const transport = new Map();
+  const nativeOps = [];
+  const requests = [];
+  let denyReadback = true;
+  let committed;
+  const broker = { async invoke({ operation }, { input, init }) {
+    const id = new URL(input).pathname.split('/').at(-1);
+    requests.push(operation);
+    if (operation === 'upload') {
+      transport.set(id, init.body.slice());
+      return Response.json({ sha256: id, bytes: init.body.length });
+    }
+    if (denyReadback) throw Error('operation-denied');
+    return new Response(transport.get(id));
+  } };
+  const sync = createWnfsSync({
+    origin,
+    packs: createDrivePackClient({ origin, capability: 'awai.drive.sync', broker, sha256: sha }),
+    verifyReceipt: (_receipt, { id }) => assert.ok(transport.has(id)),
+    sha256: sha,
+    async invoke(op, args) {
+      nativeOps.push(op);
+      if (op === 'vaultWnfsInventory') return { entries: [media] };
+      if (op === 'vaultRead') return { bytes: Buffer.from(bytes).toString('base64') };
+      if (op === 'vaultWnfsCommit') committed = args;
+      if (op === 'vaultWnfsRestoreWrite') {
+        assert.equal(args.path, media.path);
+        assert.equal(args.offset, 0);
+        assert.deepEqual(Buffer.from(args.bytes, 'base64'), Buffer.from(bytes));
+      }
+      if (op === 'vaultWnfsRestorePublish') return { folder: 'Recovered test' };
+    },
+    async compute(operation) {
+      if (operation === 'seal') return {
+        packs: [Uint8Array.of(1), Uint8Array.of(2)],
+        capsule: { root: 'a'.repeat(64), bytes: Uint8Array.of(3) }
+      };
+      return [{ path: media.path, chunks: [bytes.slice()] }];
+    }
+  });
+
+  await assert.rejects(sync.sync({}), /operation-denied/);
+  assert.equal(committed, undefined);
+  denyReadback = false;
+  requests.length = 0;
+  await sync.sync({});
+  assert.deepEqual(requests, ['upload', 'download', 'upload', 'download', 'upload', 'download']);
+  assert.equal(committed.packs.length, 2);
+  const head = { ...committed, schema: 'awai.drive.wnfs.v1' };
+  const count = nativeOps.length;
+  assert.deepEqual(await sync.restore({ wnfs: head }), { folder: 'Recovered test' });
+  assert.deepEqual(nativeOps.slice(count), ['vaultWnfsRestoreBegin', 'vaultWnfsRestoreWrite', 'vaultWnfsRestorePublish']);
+});
