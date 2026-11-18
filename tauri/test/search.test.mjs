@@ -50,4 +50,8 @@ test('local and cloud type filters work with or without a name', async () => {
   const bulk = Array.from({ length: 101 }, (_, index) => entry('trip/' + index + '.jpg'));
   assert.equal(searchCatalog('', 'image', bulk).entries.length, 100);
   assert.equal(searchCatalog('', 'image', bulk).limited, true);
+  const duplicatePath = [{ path: 'trip/day.jpg', sourceDevice: 'phone' },
+    { path: 'trip/day.jpg', sourceDevice: 'desktop' }];
+  assert.deepEqual(searchCatalog('', 'image', duplicatePath).entries.map(row => row.sourceDevice),
+    ['desktop', 'phone']);
 });

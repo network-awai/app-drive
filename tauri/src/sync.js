@@ -74,3 +74,7 @@ export const publicSnapshotRecipient = () => sharing(owner => wnfs.publicRecipie
 export const grantSnapshotRecipient = recipient => sharing(owner => wnfs.grant(owner, recipient));
 export const revokeSnapshotRecipient = id => sharing(() => wnfs.revoke(id));
 export const restoreSharedSnapshot = grant => sharing(owner => wnfs.restoreShared(owner, grant));
+export async function catalogAuthorizedAccount(grant) {
+  if (!configured || !wnfsEnabled) throw Error('recovery-required');
+  return wnfs.catalogAuthorizedAccount(grant);
+}
