@@ -1,0 +1,1 @@
+{:target :bundle :output-to ".build/drive-cljs-bundle/core.cjs" :output-dir ".build/drive-cljs" :infer-externs true :language-out :ecmascript-2020}

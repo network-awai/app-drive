@@ -59,3 +59,14 @@ lg/  (bb.edn, run_tests.clj)   # canonical = the clj twin (ADR-2606280030); DEV-
 cd 60-apps/etzhayyim-project-drive/lg && kbb run_tests.cljk
 cd 50-infra/cloudflare/workers/drive-compat && node --test test/*.test.ts
 ```
+
+## Awai Drive Tauri client
+
+`tauri/` owns the Android and macOS Tauri app `network.awai.drive`.
+Follow the workspace-level client runtime and consent contract. The client uses
+its local adapters and digest-pinned product dependencies. The existing
+`lg/`, `appview/`, and `otehon/` components have their own boundaries.
+
+Use [the Tauri runbook](tauri/README.md) for build and test instructions and
+[the WNFS design](tauri/docs/scalable-sync-design.md) for sync changes.
+Keep existing owner-store data readable during the proposed copy-only migration.
