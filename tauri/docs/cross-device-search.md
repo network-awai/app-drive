@@ -64,3 +64,22 @@ production authorization policy, publication of current heads, and the live
 endpoint are still tracked in [AWAI-2901](https://linear.app/kotobalabs/issue/AWAI-2901).
 The [Figma redesign](https://www.figma.com/design/umqCqP5KSjLWh9fhCI1HaN?node-id=333-2)
 covers both Android sizes, authorization, empty results and unavailable heads.
+
+### Figma UI and revocation re-test, 2026-11-18
+
+Tested `8409501` on 7735HS and moto g05 with isolated APK SHA-256
+`6989b7eca439818b38f07e6303faaf92d74f6354e2e1e9e796b641ac13d7c40e`.
+Both signed in with one virtual Passkey, synced a JPEG and MP4, and used the
+new Drive filters to find the other device's two files. The phone also found
+the desktop's new signed head after a second sync. The app rejected a signed
+reply for another account, a revoked source, and a revoked reader with zero
+additional pack operations. Both revocation cases displayed retry and local
+search controls. Browser UI checks passed at 388px and 1098px.
+
+Production still needs an independently authenticated authority that checks
+the reader and publishers, publishes current heads on authorized sync and
+ties incoming requests to its current revocation epoch. Awai Home
+[#279](https://github.com/network-awai/awai-os/pull/279) supplies local signing.
+The shared remote authority work is tracked in
+[apex #221](https://github.com/network-awai/network-awai-apex/pull/221) and
+[AWAI-2901](https://linear.app/kotobalabs/issue/AWAI-2901).
