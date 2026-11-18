@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {searchFiles} from '../src/search.js';
+import {searchFiles, searchCatalog} from '../src/search.js';
 
 const entry = (path, directory = false) => ({ path, directory, name: path.split('/').at(-1) });
 
@@ -34,4 +34,20 @@ test('reports partial results only once another match or folder exceeds the limi
   });
   assert.equal(reads, 200);
   assert.deepEqual(result, { entries: [], limited: true });
+});
+
+test('local and cloud type filters work with or without a name', async () => {
+  const rows = [entry('trip', true), entry('trip/夏.JPG'), entry('trip/夏.MP4'),
+    entry('trip/夏.WAV'), entry('trip/夏.PDF'), entry('trip/夏'), entry('trip/folder.jpg', true)];
+  const list = async folder => folder === '' ? rows.slice(0, 1) : folder === 'trip' ? rows.slice(1) : [];
+  for (const [kind, suffix] of [['image', 'JPG'], ['video', 'MP4'], ['audio', 'WAV'], ['document', 'PDF']]) {
+    const expected = ['trip/夏.' + suffix];
+    assert.deepEqual((await searchFiles('', list, kind)).entries.map(row => row.path), expected);
+    assert.deepEqual(searchCatalog('夏', kind, rows).entries.map(row => row.path), expected);
+    assert.deepEqual(searchCatalog('冬', kind, rows).entries, []);
+  }
+  assert.deepEqual(searchCatalog('', 'folder', rows).entries.map(row => row.path), ['trip', 'trip/folder.jpg']);
+  const bulk = Array.from({ length: 101 }, (_, index) => entry('trip/' + index + '.jpg'));
+  assert.equal(searchCatalog('', 'image', bulk).entries.length, 100);
+  assert.equal(searchCatalog('', 'image', bulk).limited, true);
 });

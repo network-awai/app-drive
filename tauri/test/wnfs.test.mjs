@@ -6,12 +6,14 @@ import { runInThisContext } from 'node:vm';
 
 globalThis.window = globalThis;
 const wnfsEnabled = process.env.AWAI_DRIVE_WNFS_SYNC === '1';
+runInThisContext(await readFile(new URL('../generated/core.js', import.meta.url), 'utf8'));
+const legacy = globalThis.AwaiDriveEncrypted;
 if (wnfsEnabled) runInThisContext(await readFile(new URL('../generated/wnfs-core.js', import.meta.url), 'utf8'));
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 
 test('WNFS copy snapshot carries more than 8 MiB across bounded CAR packs and retains v1 readback', { skip: !wnfsEnabled }, async () => {
-  const { AwaiDriveEncrypted: legacy, AwaiDriveWnfs: wnfs } = globalThis;
+  const wnfs = globalThis.AwaiDriveWnfs;
   const unlock = crypto.getRandomValues(new Uint8Array(32));
   const identity = await legacy.newRecord(unlock);
   const old = [{ path: 'existing.txt', bytes: new Uint8Array([1, 2, 3]) }];
@@ -52,6 +54,14 @@ test('WNFS copy snapshot carries more than 8 MiB across bounded CAR packs and re
   await assert.rejects(wnfs.open(identity, unlock, capsule.root, capsule.bytes, [torn, ...packs.slice(1)]));
   const prior = await legacy.openSnapshot(identity, unlock, previous.root, previous.bytes);
   assert.deepEqual(prior[0].bytes, old[0].bytes);
+  const catalog = await wnfs.catalog(identity, unlock, capsule.root, capsule.bytes, packs);
+  assert.deepEqual(catalog.map(row => row.path).sort(), rows.map(row => row.path).sort());
+  assert.ok(catalog.every(row => !Object.hasOwn(row, 'chunks')));
+  assert.equal(catalog.find(row => row.path === 'empty').directory, true);
+  await assert.rejects(wnfs.catalog(identity, wrong, capsule.root, capsule.bytes, packs));
+  await assert.rejects(wnfs.catalog(identity, unlock, capsule.root, capsule.bytes, [torn, ...packs.slice(1)]));
+  assert.deepEqual(await legacy.snapshotCatalog(identity, unlock, previous.root, previous.bytes),
+    [{ path: 'existing.txt', bytes: 3 }]);
   unlock.fill(0);
 });
 

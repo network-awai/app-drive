@@ -29,7 +29,22 @@ main header #storage { padding: .45rem .8rem; background: var(--awai-container);
   background: var(--awai-surface);
 }
 .drive-search-controls input::-webkit-search-cancel-button { appearance: none; }
+.drive-search-filters { display: flex; gap: .5rem; flex-wrap: wrap; }
+.drive-search-filters label { flex: 1 1 9rem; min-inline-size: 0; gap: .25rem; }
+.drive-search-filters label[hidden] { display: none; }
+.drive-search-filters select {
+  inline-size: 100%;
+  min-block-size: 48px;
+  padding-inline: .75rem;
+  border: 1px solid var(--awai-muted);
+  border-radius: .75rem;
+  background: var(--awai-surface);
+  color: var(--awai-text);
+  font: inherit;
+}
+.drive-search-filters select:focus-visible { outline: 3px solid var(--awai-primary); outline-offset: 2px; }
 #search-heading { margin-block: 1rem .6rem; font-size: 1.125rem; overflow-wrap: anywhere; }
+#search-cloud-help { color: var(--awai-muted); margin-block: .5rem 1rem; }
 @media (max-width: 22rem) {
   .drive-search-controls { grid-template-columns: auto auto minmax(0, 1fr); }
   .drive-search-controls input { grid-column: 1 / -1; }
@@ -47,6 +62,12 @@ main #files {
 }
 main #files li { border: 0; padding: 0; }
 main #files li + li { margin-block-start: .4rem; }
+main #files .cloud-entry {
+  display: grid;
+  padding: .65rem .9rem;
+  border-radius: .75rem;
+  background: var(--awai-background);
+}
 main #files button.awai-button {
   display: grid;
   justify-items: start;

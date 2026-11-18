@@ -201,7 +201,7 @@
         (.then (fn [capsule]
                  #js {:capsule capsule :packs (make-packs store (:forest sealed))})))))
 
-(defn open [record secret root capsule packs]
+(defn- read-tree [record secret root capsule packs metadata-only?]
   (-> (open-capsule record secret root capsule)
       (.then (fn [{:keys [forest access]}]
                (let [store (read-packs packs forest)
@@ -220,13 +220,21 @@
                                      (path-parts child)
                                      (visit (node/parse-ref ref (aget (.-entries body) name)) child (inc depth)))))
                                "wnfs/priv/file"
-                               (let [chunks (array)]
-                                 (node/stream-file store loaded entry
-                                   (fn [part]
-                                     (let [data (blocks/u8 part)]
-                                       (when (> (swap! total + (.-length data)) snapshot-limit) (refuse))
-                                       (.push chunks data))))
-                                 (.push rows #js {:path path :chunks chunks}))
+                               (if metadata-only?
+                                 (.push rows #js {:path path})
+                                 (let [chunks (array)]
+                                   (node/stream-file store loaded entry
+                                     (fn [part]
+                                       (let [data (blocks/u8 part)]
+                                         (when (> (swap! total + (.-length data)) snapshot-limit) (refuse))
+                                         (.push chunks data))))
+                                   (.push rows #js {:path path :chunks chunks})))
                                (refuse))))]
                    (visit access "" 0)
                    rows))))))
+
+(defn open [record secret root capsule packs]
+  (read-tree record secret root capsule packs false))
+
+(defn catalog [record secret root capsule packs]
+  (read-tree record secret root capsule packs true))

@@ -9,6 +9,8 @@ self.onmessage = async ({ data: { operation, record, secret, rows, root, capsule
     } else if (operation === 'open') {
       const result = await self.AwaiDriveWnfs.open(record, secret, root, capsule, packs);
       self.postMessage({ result }, result.flatMap(row => (row.chunks || []).map(bytes => bytes.buffer)));
+    } else if (operation === 'catalog') {
+      self.postMessage({ result: await self.AwaiDriveWnfs.catalog(record, secret, root, capsule, packs) });
     } else {
       throw Error('invalid-wnfs-worker-operation');
     }

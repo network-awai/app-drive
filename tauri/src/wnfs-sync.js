@@ -53,6 +53,29 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
     }
   }
 
+  async function readSnapshot(session, operation) {
+    const head = session.wnfs;
+    if (head?.schema !== 'awai.drive.wnfs.v1' || head.origin !== origin ||
+        !PACK_ID.test(head.root) || !PACK_ID.test(head.capsule) || !Array.isArray(head.packs) ||
+        head.packs.length < 1 || head.packs.length > 8 ||
+        head.packs.some(id => !PACK_ID.test(id)) ||
+        new Set([head.capsule, ...head.packs]).size !== head.packs.length + 1) {
+      throw Error('recovery-required');
+    }
+    const capsule = await packs.download(head.capsule);
+    if (capsule.length > 262144) throw Error('invalid-wnfs-snapshot');
+    const data = [];
+    let size = 0;
+    for (const id of head.packs) {
+      const pack = await packs.download(id);
+      size += pack.length;
+      if (size > 4 * PACK_BYTES) throw Error('invalid-wnfs-snapshot');
+      data.push(pack);
+    }
+    return compute(operation, session, { root: head.root, capsule, packs: data },
+      [capsule.buffer, ...data.map(pack => pack.buffer)]);
+  }
+
   return {
     restoreCopy,
     async sync(session) {
@@ -88,28 +111,9 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
       }
     },
 
+    catalog: session => readSnapshot(session, 'catalog'),
     async restore(session) {
-      const head = session.wnfs;
-      if (head?.schema !== 'awai.drive.wnfs.v1' || head.origin !== origin ||
-          !PACK_ID.test(head.root) || !PACK_ID.test(head.capsule) || !Array.isArray(head.packs) ||
-          head.packs.length < 1 || head.packs.length > 8 ||
-          head.packs.some(id => !PACK_ID.test(id)) ||
-          new Set([head.capsule, ...head.packs]).size !== head.packs.length + 1) {
-        throw Error('recovery-required');
-      }
-      const capsule = await packs.download(head.capsule);
-      if (capsule.length > 262144) throw Error('invalid-wnfs-snapshot');
-      const data = [];
-      let size = 0;
-      for (const id of head.packs) {
-        const pack = await packs.download(id);
-        size += pack.length;
-        if (size > 4 * PACK_BYTES) throw Error('invalid-wnfs-snapshot');
-        data.push(pack);
-      }
-      const rows = await compute('open', session, { root: head.root, capsule, packs: data },
-        [capsule.buffer, ...data.map(pack => pack.buffer)]);
-      return restoreCopy(rows);
+      return restoreCopy(await readSnapshot(session, 'open'));
     }
   };
 }

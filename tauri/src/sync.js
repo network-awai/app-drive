@@ -22,6 +22,25 @@ function verifyReceipt(receipt, expected) {
 }
 const wnfs = createWnfsSync({ invoke, origin: syncOrigin, packs, verifyReceipt, sha256: core.sha256 });
 export const configured=Boolean(syncOrigin);
+
+export async function cloudCatalog() {
+  if (!configured) throw Error('cloud-snapshot-unavailable');
+  const saved = await invoke('vaultSession', { initialize: false });
+  if (!saved.initialized || !saved.record) throw Error('cloud-snapshot-unavailable');
+  const session = { ...saved, secret: unb64(saved.secret) };
+  try {
+    if (session.wnfs) {
+      if (!wnfsEnabled || session.wnfs.origin !== syncOrigin) throw Error('cloud-snapshot-unavailable');
+      return await wnfs.catalog(session);
+    }
+    if (!session.root || !session.pack || session.origin !== syncOrigin) throw Error('cloud-snapshot-unavailable');
+    const bytes = await packs.download(session.pack);
+    return await core.snapshotCatalog(session.record, session.secret, session.root, bytes);
+  } finally {
+    session.secret.fill(0);
+  }
+}
+
 export async function sync(){const s=await session(true);try{
  if(wnfsEnabled)return await wnfs.sync(s);
  if(s.wnfs)throw Error('recovery-required');
