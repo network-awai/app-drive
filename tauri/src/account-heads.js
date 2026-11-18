@@ -45,5 +45,26 @@ export async function discoverAccountHeads({ requestHeads, issuerKey, subject, d
       !Number.isSafeInteger(payload.policyEpoch) || payload.policyEpoch < 0 ||
       !Array.isArray(payload.sources)) throw reject();
 
-  return { subject, sources: payload.sources, expires: payload.expires };
+  const sourceDevices = payload.sources.map(source => source?.deviceDid);
+  if (sourceDevices.some(id => typeof id !== 'string' || !accountDid.test(id)) ||
+      new Set(sourceDevices).size !== sourceDevices.length) throw reject();
+
+  return {
+    subject, sources: payload.sources, expires: payload.expires,
+    policyScope: Object.freeze({
+      subject, device, recipient, epoch: payload.policyEpoch,
+      sources: Object.freeze(sourceDevices),
+    }),
+  };
+}
+
+export function accountHeadGuard(heads, checkCurrentPolicy, now = Date.now) {
+  if (typeof checkCurrentPolicy !== 'function') throw Error('account-head-policy-unavailable');
+  // The host confirms this exact epoch, reader binding and every source device.
+  // A cached approval or a signature alone cannot establish current membership.
+  return async () => {
+    if (now() >= heads.expires) throw reject();
+    if (await checkCurrentPolicy(heads.policyScope) !== true) throw Error('account-head-policy-unavailable');
+    if (now() >= heads.expires) throw reject();
+  };
 }

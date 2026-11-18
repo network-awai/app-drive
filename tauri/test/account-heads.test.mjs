@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { accountHeadsType, discoverAccountHeads } from '../dist/account-heads.js';
+import { accountHeadGuard, accountHeadsType, discoverAccountHeads } from '../dist/account-heads.js';
 import { toBase64Url } from '../dist/account-link-core.js';
 
 const encoder = new TextEncoder();
@@ -21,14 +21,26 @@ async function sign(payload, key = issuer.privateKey) {
 test('account discovery authenticates a fresh challenge and a pinned issuer', async () => {
   const clock = 100_000;
   const args = { issuerKey: issuer.publicKey, subject, device, recipient, now: () => clock };
-  const sources = [{ deviceId: 'peer-device' }];
+  const peer = 'did:key:z' + 'E'.repeat(44);
+  const sources = [{ deviceId: 'peer-device', deviceDid: peer }];
   let oldReply;
   const payload = scope => ({...scope, expires: clock + 10_000, policyEpoch: 1, sources});
   const valid = await discoverAccountHeads({...args, requestHeads: async scope => {
     oldReply = await sign(payload(scope));
     return oldReply;
   }});
-  assert.deepEqual(valid, {subject, sources, expires: clock + 10_000});
+  assert.deepEqual(valid, {subject, sources, expires: clock + 10_000,
+    policyScope: {subject, device, recipient, epoch: 1, sources: [peer]}});
+  let active = true;
+  const guard = accountHeadGuard(valid, async scope => {
+    assert.equal(scope, valid.policyScope);
+    return active;
+  }, () => clock);
+  await guard();
+  active = false;
+  await assert.rejects(guard(), /account-head-policy-unavailable/);
+  await assert.rejects(accountHeadGuard(valid, () => true, () => clock + 10_000)(), /invalid-account-heads/);
+  assert.throws(() => accountHeadGuard(valid), /account-head-policy-unavailable/);
   await assert.rejects(discoverAccountHeads({...args, requestHeads: () => oldReply}), /invalid-account-heads/);
 
   for (const patch of [
@@ -38,6 +50,8 @@ test('account discovery authenticates a fresh challenge and a pinned issuer', as
     {expires: clock},
     {expires: clock + 60_001},
     {policyEpoch: -1},
+    {sources: [{deviceId: 'peer-device'}]},
+    {sources: [sources[0], sources[0]]},
   ]) {
     await assert.rejects(discoverAccountHeads({...args, requestHeads: scope => sign({...payload(scope), ...patch})}),
       /invalid-account-heads/);
