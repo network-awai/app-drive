@@ -11,7 +11,7 @@ self.onmessage = async ({ data: { operation, record, secret, rows, root, capsule
       const result = await self.AwaiDriveWnfs.seal(record, secret, rows, recipients);
       self.postMessage({ result }, [result.capsule.bytes.buffer, ...result.packs.map(bytes => bytes.buffer), ...result.grants.flatMap(g => [g.capsule.bytes.buffer, g.releaseKey.buffer])]);
     } else if (operation === 'catalog') {
-      self.postMessage({ result: await self.AwaiDriveWnfs.catalog(record, secret, root, capsule, packs) });
+      self.postMessage({ result: await self.AwaiDriveWnfs.catalog(record, secret, root, capsule, packs, releaseKey) });
     } else if (operation === 'open' || operation === 'inspect' || operation === 'open-share') {
       const snapshot = await self.AwaiDriveWnfs.openSnapshot(record, secret, root, capsule, packs, releaseKey);
       const started = performance.now();

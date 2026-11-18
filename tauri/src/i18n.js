@@ -1,5 +1,17 @@
 export const messages={
   "ja": {
+    "account.title": "Awai アカウント",
+    "account.start": "既存の Passkey で端末を認可",
+    "account.instructions": "Passkey を登録したブラウザでこの URL を開き、確認コードの一致を確認してください。",
+    "account.url": "承認ページの URL",
+    "account.code": "確認コード {code}",
+    "account.receive": "承認を受け取る",
+    "account.unlinked": "この端末は未認可です。",
+    "account.linked": "端末認可済み · {did}",
+    "account.waiting": "ブラウザでの承認を待っています。",
+    "account.cancelled": "端末認可を取り消しました。",
+    "account.mismatch": "この端末を認可した Awai アカウントの Passkey を使ってください。",
+    "account.failed": "端末認可を確認できませんでした。承認ページと確認コードを再確認してください。",
     "sync.dirty":"この端末 · 未同期","sync.action":"暗号化して同期","sync.restore":"クラウドから復旧","sync.restoreLegacy":"以前の形式から復旧","sync.restoredCopy":"元のファイルを保持し、新しいフォルダに復元しました。","sync.evict":"空き容量を増やす","sync.busy":"暗号化・同期中…","sync.restoring":"暗号文を取得・検証しています…","sync.ready":"暗号化同期済み · オフライン利用可","sync.success":"暗号化して同期しました。","sync.restored":"復旧しました。","sync.evicted":"端末内コピーなし · 再取得には接続が必要","sync.confirm":"同期済みの端末内コピーを削除しますか？","sync.confirm-body":"未同期の変更がある場合は削除しません。再取得には接続が必要です。","error.unsynced-data":"未同期の変更があります。端末のデータを保持しました。","error.sync-size-limit":"この同期方式で扱える容量を超えています。元のファイルを保持しています。","error.recovery-required":"暗号鍵または復旧情報が必要です。既存データを保持しています。","error.storage-receipt-invalid":"保存先の受領証を確認できませんでした。同期済みにしていません。元のファイルを保持しています。",
 
     "app.title": "Awai Drive",
@@ -63,6 +75,18 @@ export const messages={
     "error.unknown": "操作を完了できませんでした。元のファイルは変更していません。"
   },
   "en": {
+    "account.title": "Awai account",
+    "account.start": "Authorize this device with an existing Passkey",
+    "account.instructions": "Open this URL in the browser where your Passkey was set up and compare the code.",
+    "account.url": "Approval URL",
+    "account.code": "Confirmation code {code}",
+    "account.receive": "Receive approval",
+    "account.unlinked": "This device is awaiting authorization.",
+    "account.linked": "Device authorized · {did}",
+    "account.waiting": "Waiting for browser approval.",
+    "account.cancelled": "Device authorization cancelled.",
+    "account.mismatch": "Use the Awai Passkey that previously authorized this device.",
+    "account.failed": "Authorization could not be verified. Check the approval page and code.",
     "sync.dirty":"This device · Unsynced","sync.action":"Encrypt and sync","sync.restore":"Restore from storage","sync.restoreLegacy":"Restore legacy snapshot","sync.restoredCopy":"Restored to a new folder. Original files were kept.","sync.evict":"Free up space","sync.busy":"Encrypting and syncing…","sync.restoring":"Fetching and verifying encrypted files…","sync.ready":"Encrypted sync complete · Available offline","sync.success":"Encrypted files synced.","sync.restored":"Files restored.","sync.evicted":"No device copy · Connect to retrieve files","sync.confirm":"Remove synced device copies?","sync.confirm-body":"Unsynced changes will be kept. A connection is required to retrieve files again.","error.unsynced-data":"Unsynced changes exist. Device data has been kept.","error.sync-size-limit":"This snapshot exceeds the sync profile’s capacity. Original files have been kept.","error.recovery-required":"Key or recovery information is required. Existing data has been kept.","error.storage-receipt-invalid":"The storage receipt could not be verified. Nothing was marked as synced; original files have been kept.",
 
     "app.title": "Awai Drive",

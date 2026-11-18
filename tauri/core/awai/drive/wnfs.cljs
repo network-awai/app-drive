@@ -321,8 +321,8 @@
 (defn open-snapshot [record secret root capsule packs release]
   (read-snapshot record secret root capsule packs false release))
 
-(defn catalog [record secret root capsule packs]
-  (read-snapshot record secret root capsule packs true nil))
+(defn catalog [record secret root capsule packs release]
+  (read-snapshot record secret root capsule packs true release))
 
 (defn open [record secret root capsule packs]
   (-> (open-snapshot record secret root capsule packs nil)

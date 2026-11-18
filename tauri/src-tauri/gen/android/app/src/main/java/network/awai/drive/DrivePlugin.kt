@@ -21,11 +21,12 @@ import java.util.concurrent.Executors
 class DrivePlugin(private val owner:Activity):Plugin(owner){
  private val worker=Executors.newSingleThreadExecutor()
  private val vault by lazy{DriveVault(owner)}
+ private val account by lazy{DriveAccountLink(owner)}
  private val local by lazy{DriveFiles(File(owner.filesDir,"drive-local-v1"))}
  private fun sync(parent:String){val dir=local.resolve(parent);require(dir.isDirectory);val fd=android.system.Os.open(dir.path,android.system.OsConstants.O_RDONLY,0);try{android.system.Os.fsync(fd)}finally{android.system.Os.close(fd)}}
  private fun args(i:Invoke):JSONObject{val raw=i.getArgs().getString("payload");require(raw.toByteArray().size<=131072);return JSONObject(raw)}
- private fun code(e:Exception):String{android.util.Log.w("AwaiDrive",e.javaClass.simpleName+":"+e.stackTrace.take(10).joinToString(";"){it.className+"."+it.methodName+":"+it.lineNumber});if(e is FileAlreadyExistsException)return "file-exists";return e.message?.takeIf{it in setOf("account-broker-unavailable","account-approval-denied","account-vault-mismatch","invalid-name","invalid-path","storage-full","file-too-large","entry-limit","file-busy","source-size-changed","local-provider-required","unsynced-data","recovery-required","restore-mismatch","sync-size-limit")}?:"drive-operation-failed"}
- @Command fun execute(i:Invoke){try{val q=args(i);if(q.getString("op").startsWith("vault")){worker.execute{try{i.resolve(JSObject(vault.execute(q).toString()))}catch(e:Exception){i.reject(code(e))}};return};when(q.getString("op")){
+ private fun code(e:Exception):String{android.util.Log.w("AwaiDrive",e.javaClass.simpleName+":"+e.stackTrace.take(10).joinToString(";"){it.className+"."+it.methodName+":"+it.lineNumber});if(e is FileAlreadyExistsException)return "file-exists";return e.message?.takeIf{it in setOf("invalid-name","invalid-path","storage-full","file-too-large","entry-limit","file-busy","source-size-changed","local-provider-required","unsynced-data","recovery-required","restore-mismatch","sync-size-limit","account-mismatch","account-device-key-missing","invalid-account-link","account-broker-unavailable","account-approval-denied","account-vault-mismatch")}?:"drive-operation-failed"}
+ @Command fun execute(i:Invoke){try{val q=args(i);val op=q.getString("op");if((op.startsWith("account")&&op!="accountProof")||op.startsWith("vault")){worker.execute{try{val response=if(op.startsWith("account")) account.execute(q) else vault.execute(q);i.resolve(JSObject(response.toString()))}catch(e:Exception){i.reject(code(e))}};return};when(op){
   "accountProof"->{
    val host="network.awai.home"
    if(owner.packageManager.checkSignatures(host,owner.packageName)!=android.content.pm.PackageManager.SIGNATURE_MATCH)

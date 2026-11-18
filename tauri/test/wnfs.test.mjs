@@ -86,6 +86,35 @@ test('a distinct owner and recipient share a basis, and a revoked recipient cann
     const opened = await wnfs.openSnapshot(b, bob, capsule.root, capsule.bytes, first.packs, releaseKey);
     assert.equal(opened.basis, first.basis);
     assert.deepEqual(wnfs.inventory(opened.rows), [{ path: 'first.txt', directory: false, size: 2, sha256: sha(Uint8Array.of(1, 2)) }]);
+    const { createWnfsSync } = await import('../src/wnfs-sync.js');
+    const origin = 'https://storage.example';
+    const blocks = new Map([capsule.bytes, ...first.packs].map(bytes => [sha(bytes), bytes]));
+    const subject = 'did:key:zExisting';
+    const grant = { schema: 'awai.drive.wnfs.grant.v2', recipient: recipient.id, basis: first.basis,
+      releaseKey: Buffer.from(releaseKey).toString('base64'),
+      head: { schema: 'awai.drive.wnfs.v1', origin, root: capsule.root, capsule: sha(capsule.bytes),
+        packs: first.packs.map(sha) } };
+    let downloads = 0;
+    const reader = createWnfsSync({
+      origin,
+      packs: { async download(id) { downloads++; return blocks.get(id).slice(); } },
+      async compute(op, session, input) {
+        if (op === 'public-recipient') return wnfs.publicRecipient(session.record);
+        assert.equal(op, 'catalog');
+        assert.equal(input.releaseKey.length, 32);
+        return wnfs.catalog(session.record, session.secret, input.root, input.capsule, input.packs, input.releaseKey);
+      },
+    });
+    const sources = [{ subject, deviceId: 'sender-device', grant }];
+    await assert.rejects(reader.catalogAccountRecipients({record: a, secret: alice}, {subject, sources}),
+      /invalid-snapshot-grant/);
+    assert.equal(downloads, 0);
+    const { releaseKey: _omitted, ...ungated } = grant;
+    await assert.rejects(reader.catalogAccountRecipients({record: b, secret: bob},
+      {subject, sources: [{ subject, deviceId: 'sender-device', grant: ungated }]}), /invalid-snapshot-grant/);
+    assert.equal(downloads, 0);
+    assert.deepEqual(await reader.catalogAccountRecipients({record: b, secret: bob}, {subject, sources}),
+      [{path: 'first.txt', directory: false, sourceDevice: 'sender-device'}]);
     await assert.rejects(wnfs.openSnapshot(a, alice, capsule.root, capsule.bytes, first.packs, releaseKey));
     const next = await wnfs.seal(a, alice, [{ path: 'next.txt', bytes: Uint8Array.of(3) }], []);
     assert.equal(next.grants.length, 0);
