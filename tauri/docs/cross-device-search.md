@@ -31,9 +31,10 @@ The recipient-based adapter in `src/sync.js` verifies a short-lived compact
 Ed25519 JWS from a configured, independently authenticated host. The response
 echoes the one-time challenge, account DID, Android device DID, and WNFS
 recipient ID. It carries an expiry, authority policy epoch, and recipient
-capsules for the authorized source devices. The trust key comes from the host
-configuration. The app checks expiry before each pack read and rejects an
-unverified forest basis even after successful decryption.
+capsules bound to the signed device DID of each authorized source. The trust key comes from the host
+configuration. The app requires the host to confirm the exact reader, recipient, source device
+DIDs and policy epoch before each pack operation and again before releasing results.
+It checks expiry across those asynchronous checks and verifies the decrypted forest basis.
 
 The host must verify membership, request identity and current revocations before
 discovering the authoritative heads on each request. The adapter does not

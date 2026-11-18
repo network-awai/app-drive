@@ -76,24 +76,24 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
     const head = session.wnfs;
     validateHead(head);
     const started = performance.now();
-    guard?.();
+    if (guard) await guard();
     const capsule = await packs.download(head.capsule);
     if (capsule.length > 262144) throw Error('invalid-wnfs-snapshot');
     const capsuleBytes = capsule.length;
     const data = [];
     let size = 0;
     for (const id of head.packs) {
-      guard?.();
+      if (guard) await guard();
       const pack = await packs.download(id);
       size += pack.length;
       if (size > 4 * PACK_BYTES) throw Error('invalid-wnfs-snapshot');
       data.push(pack);
     }
-    guard?.();
+    if (guard) await guard();
     const fetched = performance.now();
     const snapshot = await compute(operation, session, { root: head.root, capsule, packs: data, extension },
       [capsule.buffer, ...data.map(pack => pack.buffer)]);
-    guard?.();
+    if (guard) await guard();
     if (Array.isArray(snapshot)) return snapshot;
     return { ...snapshot, fetchMs: fetched - started, openMs: performance.now() - fetched, bytes: size + capsuleBytes };
   }
@@ -128,6 +128,7 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
           entries.push({ path, directory, sourceDevice: deviceId });
         }
       }
+      if (guard) await guard();
       return entries;
     } finally {
       for (const { owner } of admitted) owner.secret.fill(0);
