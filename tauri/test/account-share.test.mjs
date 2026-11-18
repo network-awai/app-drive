@@ -20,13 +20,13 @@ test('an unsigned or malformed share is refused before restore', async () => {
 });
 
 test('ordinary sync does not silently publish to old unsigned recipients', async () => {
-  const items = { legacy: { id: 'legacy' } };
+  const items = { legacy: { id: 'legacy' }, expired: { id: 'expired' } };
   const sharing = createAccountSharing({
     invoke: () => assert.fail('no account request for owner-only sync'),
     wnfs: { async sync(_session, select) {
-      assert.deepEqual(await select(items, {}), []);
+      assert.deepEqual(await select(items, { expired: { schema: 'awai.wnfs.account-proof.v1', claim: { expires: 1 }, key: 'A'.repeat(87), signature: 'A'.repeat(86) } }), []);
       return { grants: [] };
     } },
   });
-  assert.deepEqual(await sharing.sync({}), { grants: [] });
+  assert.deepEqual(await sharing.sync({}), { grants: [], unverifiedRecipients: ['legacy', 'expired'], unpublishedRecipients: [] });
 });
