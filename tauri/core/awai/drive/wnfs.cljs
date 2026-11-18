@@ -11,6 +11,8 @@
             [awai.wnfs.private-tree :as tree]
             [awai.wnfs.wire :as wire]
             [envelope.keystore :as keys]
+            [envelope.seal :as envelope]
+            ["@noble/ciphers/aes" :as aes]
             ["@noble/curves/abstract/modular" :as modular]
             ["@awai/drive-wnfs-platform/cid" :refer [CID]]
             ["@awai/drive-wnfs-platform/digest" :as digest]
@@ -137,7 +139,15 @@
               (recur end (or found-root root?)))))))
     out))
 
-(defn- recipient-capsule [recipient forest access]
+(defn- gate-capsule [release plaintext]
+  (let [iv (js/crypto.getRandomValues (js/Uint8Array. 12))
+        payload (.encrypt (aes/gcm release iv) plaintext)
+        packed (js/Uint8Array. (+ (.-length iv) (.-length payload)))]
+    (.set packed iv)
+    (.set packed payload (.-length iv))
+    packed))
+
+(defn- recipient-capsule [recipient forest access release]
   (let [objects (atom {})
         plaintext (blocks/u8
                    (blocks/encode
@@ -146,7 +156,7 @@
                                       #js {:label (blocks/u8 (:label access))
                                            :temporalKey (blocks/u8 (:temporal-key access))
                                            :contentCid (:content-cid access)}}}))]
-    (-> (encrypted/object! objects recipient plaintext)
+    (-> (encrypted/object! objects recipient (if release (gate-capsule release plaintext) plaintext))
         (.then (fn [root]
                  (let [cid #(car/cid-bytes car/codec-raw (encrypted/unhex %))]
                    #js {:root root
@@ -178,7 +188,7 @@
   (let [record (edn/read-string record)]
     (validate-recipient #js {:id (:recipient-key record) :pub (:pub record) :pq (:pq-pub record)})))
 
-(defn- open-capsule [record secret root pack]
+(defn- open-capsule [record secret root pack release]
   (when (> (.-length pack) 262144) (refuse))
   (let [{:keys [roots blocks]} (car/carv1-decode (vec pack))
         cid #(car/cid-bytes car/codec-raw (encrypted/unhex %))
@@ -197,6 +207,14 @@
         (.then (fn [owner]
                  (-> (encrypted/open-object @objects root owner)
                      (.finally #(encrypted/wipe! owner)))))
+        (.then (fn [plain]
+                 (if release
+                   (try
+                     (when (or (not= 32 (.-length release)) (< (.-length plain) 28)) (refuse))
+                     (.decrypt (aes/gcm release (.subarray plain 0 12)) (.subarray plain 12))
+                     (catch :default _ (refuse))
+                     (finally (.fill plain 0)))
+                   plain)))
         (.then (fn [plain]
                  (try
                    (let [capsule (blocks/decode plain)
@@ -234,19 +252,25 @@
                                          (tree-sources rows) (js/Math.floor (/ (js/Date.now) 1000)))
                   {:keys [forest access]} sealed
                   grants (array)]
-              (-> (recipient-capsule (assoc owner :pq-pub (:pq-pub record)) forest access)
+              (-> (recipient-capsule (assoc owner :pq-pub (:pq-pub record)) forest access nil)
                   (.then
                    (fn [capsule]
                      (-> (encrypted/sequence!
                           (array-seq recipients)
                           (fn [entry]
-                            (-> (admit-recipient entry)
-                                (.then #(recipient-capsule % forest access))
-                                (.then (fn [recipient-pack]
-                                         (.push grants #js {:recipient (.-id entry) :capsule recipient-pack}))))))
+                            (let [release (envelope/generate-content-key)]
+                              (-> (admit-recipient entry)
+                                  (.then #(recipient-capsule % forest access release))
+                                  (.then (fn [recipient-pack]
+                                           (.push grants #js {:recipient (.-id entry) :capsule recipient-pack
+                                                              :releaseKey release})))
+                                  (.catch (fn [error] (.fill release 0) (throw error)))))))
                          (.then (fn [_]
                                   #js {:capsule capsule :packs (make-packs store forest)
                                        :basis (.toString forest) :grants grants})))))
+                  (.catch (fn [error]
+                            (doseq [grant (array-seq grants)] (.fill (.-releaseKey grant) 0))
+                            (throw error)))
                   (.finally #(encrypted/wipe! owner))))))))))
 
 (defn inventory [rows]
@@ -262,8 +286,8 @@
                    :sha256 (encrypted/hex (.digest digest))})))
         (array-seq rows))))
 
-(defn- read-snapshot [record secret root capsule packs metadata-only?]
-  (-> (open-capsule record secret root capsule)
+(defn- read-snapshot [record secret root capsule packs metadata-only? release]
+  (-> (open-capsule record secret root capsule release)
       (.then (fn [{:keys [forest access]}]
                (let [store (read-packs packs forest)
                      loaded (wire/load-forest store forest)
@@ -294,12 +318,12 @@
                    (visit access "" 0)
                    #js {:rows rows :basis (.toString forest)}))))))
 
-(defn open-snapshot [record secret root capsule packs]
-  (read-snapshot record secret root capsule packs false))
+(defn open-snapshot [record secret root capsule packs release]
+  (read-snapshot record secret root capsule packs false release))
 
 (defn catalog [record secret root capsule packs]
-  (read-snapshot record secret root capsule packs true))
+  (read-snapshot record secret root capsule packs true nil))
 
 (defn open [record secret root capsule packs]
-  (-> (open-snapshot record secret root capsule packs)
+  (-> (open-snapshot record secret root capsule packs nil)
       (.then (fn [snapshot] (.-rows snapshot)))))
