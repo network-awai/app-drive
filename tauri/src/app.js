@@ -4,6 +4,9 @@ import*as encryptedSync from'./sync.js';
 import './core.js';
 import {translator,messages} from './i18n.js';
 import {searchFiles,searchCatalog} from './search.js';
+import {createDriveAccountLink} from './account-link.js';
+import {runtimeFor,accountOperation} from './sync-contract.js';
+import {accountLinkEnabled} from './sync-config.js';
 const {lang,t,bytes}=translator(navigator.language);document.documentElement.lang=lang;document.querySelectorAll('[data-i18n]').forEach(n=>n.textContent=t(n.dataset.i18n));document.querySelectorAll('[data-i18n-aria]').forEach(n=>n.setAttribute('aria-label',t(n.dataset.i18nAria)));
 import {createHost} from './host.js';
 import {clientRuntimeProblems,createClientConsentHost,createClientOperationBroker} from './runtime.js';
@@ -133,3 +136,71 @@ $('evict-cancel').onclick=()=>$('evict-confirm').close();
 $('evict-allow').onclick=()=>{$('evict-confirm').close();task(async()=>{await encryptedSync.evict();parent='';await list();$('storage').textContent=t('sync.evicted');});};
 if(!encryptedSync.configured){$('sync').hidden=true;$('restore').hidden=true;$('evict').hidden=true;}
 else $('search-scope-field').hidden = false;
+
+if (accountLinkEnabled && /Android/i.test(navigator.userAgent)) {
+  const accountBroker = createClientOperationBroker({
+    runtime: runtimeFor('', false, true),
+    requestedCapabilities: [accountOperation.capability],
+    approvedOperations: [accountOperation],
+    hostSupportedOperations: [[accountOperation.capability, accountOperation.service, accountOperation.operation]],
+    consentHost: createClientConsentHost(),
+  });
+  const account = createDriveAccountLink({
+    call,
+    approve: ({capability, service, operation}, input, signal) =>
+      accountBroker.invoke({capability, service, operation}, {input, init: {method: 'GET'}}, {signal}),
+  });
+  let pending, waiting;
+  const status = value => { $('account-status').textContent = value; };
+  const showAccount = value => status(value ? t('account.linked', {did: value.accountDid}) : t('account.unlinked'));
+  const clearRequest = () => {
+    pending = undefined;
+    $('account-url').value = '';
+    $('account-code').textContent = '';
+    $('account-request').hidden = true;
+  };
+  $('drive-account').hidden = false;
+  account.linkedAccount().then(showAccount).catch(() => status(t('account.failed')));
+  $('account-begin').onclick = async () => {
+    if (waiting) return;
+    $('account-begin').disabled = true;
+    try {
+      pending = await account.begin();
+      $('account-code').textContent = t('account.code', {code: pending.code});
+      $('account-url').value = pending.url;
+      $('account-request').hidden = false;
+      $('account-url').focus();
+      status('');
+    } catch {
+      status(t('account.failed'));
+    } finally {
+      $('account-begin').disabled = false;
+    }
+  };
+  $('account-receive').onclick = async () => {
+    if (!pending || waiting) return;
+    waiting = new AbortController();
+    const signal = waiting.signal;
+    const timer = setTimeout(() => waiting.abort(), 10 * 60 * 1000);
+    $('account-receive').disabled = true;
+    try {
+      status(t('account.waiting'));
+      showAccount(await pending.finish(signal));
+    } catch (error) {
+      status(t(signal.aborted || error.message === 'client operation was not approved'
+        ? 'account.cancelled' : error.message === 'account-mismatch' ? 'account.mismatch' : 'account.failed'));
+    } finally {
+      clearTimeout(timer);
+      waiting = undefined;
+      clearRequest();
+      $('account-receive').disabled = false;
+      $('account-begin').focus();
+    }
+  };
+  $('account-cancel').onclick = () => {
+    waiting?.abort();
+    clearRequest();
+    status(t('account.cancelled'));
+    $('account-begin').focus();
+  };
+}

@@ -1,4 +1,17 @@
 <!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title data-i18n="app.title">Awai Drive</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="awai-ui/awai-ui.css"></head><body><a class="skip" href="#files" data-i18n="app.skip">ファイル一覧へ</a><main><header><h1 data-i18n="app.title">Awai Drive</h1><p id="storage" data-i18n="storage.state">この端末 · AwaiFS 未接続</p></header>
+<section id="drive-account" class="drive-account" aria-labelledby="account-title" hidden>
+  <h2 id="account-title" data-i18n="account.title">Awai アカウント</h2>
+  <p id="account-status" role="status"></p>
+  <button id="account-begin" type="button" class="secondary" data-i18n="account.start">既存の Passkey で端末を認可</button>
+  <div id="account-request" hidden>
+    <p id="account-instructions" data-i18n="account.instructions">Passkey を登録したブラウザでこの URL を開き、確認コードが一致することを確認してください。</p>
+    <p id="account-code"></p>
+    <label for="account-url" data-i18n="account.url">承認ページの URL</label>
+    <input id="account-url" type="url" readonly aria-describedby="account-instructions account-code">
+    <button id="account-receive" type="button" class="tonal" data-i18n="account.receive">承認を受け取る</button>
+    <button id="account-cancel" type="button" class="secondary" data-i18n="action.cancel">キャンセル</button>
+  </div>
+</section>
 <search class="drive-search" role="search">
   <form id="search-form" aria-labelledby="search-label">
     <label id="search-label" for="search-query" data-i18n="search.label">ファイル名</label>
