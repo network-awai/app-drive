@@ -1,2 +1,3 @@
 {:paths ["core" "vendor"] :deps {org.clojure/clojure {:mvn/version "1.12.1"} org.clojure/clojurescript {:mvn/version "1.12.145"}}
- :aliases {:build {:main-opts ["-m" "cljs.main" "-O" "advanced" "-co" "build.edn" "-c" "awai.drive.bridge"]}}}
+ :aliases {:build {:main-opts ["-m" "cljs.main" "-O" "advanced" "-co" "build.edn" "-c" "awai.drive.bridge"]}
+           :wnfs {:extra-paths [".build/wnfs"] :main-opts ["-m" "cljs.main" "-O" "advanced" "-co" "build-wnfs.edn" "-c" "awai.drive.wnfs-bridge"]}}}

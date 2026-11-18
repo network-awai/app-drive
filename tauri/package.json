@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "clojure -M:build && node scripts/bundle.mjs && node scripts/build.mjs",
+    "build": "clojure -M:build && node scripts/bundle.mjs && node scripts/build-wnfs.mjs && node scripts/build.mjs",
     "test": "node --test test/*.test.mjs",
     "tauri": "tauri",
     "build:android": "npm run build && tauri android build --apk --target aarch64",
@@ -15,8 +15,13 @@
     "esbuild": "0.27.0"
   },
   "dependencies": {
+    "@awai/drive-wnfs-platform": "file:scripts/wnfs-platform",
+    "@ipld/dag-cbor": "9.2.5",
+    "@noble/ciphers": "1.3.0",
     "@noble/curves": "1.9.7",
     "@noble/hashes": "1.8.0",
-    "@noble/post-quantum": "0.5.4"
+    "@noble/post-quantum": "0.5.4",
+    "buffer": "6.0.3",
+    "multiformats": "13.4.1"
   }
 }

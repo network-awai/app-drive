@@ -5,3 +5,6 @@ dist/
 
 src-tauri/gen/schemas/
 src-tauri/gen/android/app/src/debug/
+
+# Contains compiled WNFS implementation from the authorized apex checkout.
+generated/wnfs-core.js
