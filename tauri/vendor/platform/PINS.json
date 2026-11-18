@@ -128,5 +128,11 @@
         "sha256": "ea0937fa99f8d8efe0f6ca1c047c876126df78ea04b03c28cfc03d68cdfa733b"
       }
     }
+  },
+  "wnfsAccount": {
+    "repository": "https://github.com/network-awai/awai-os",
+    "revision": "f69a99c7b460a0d7dfbdd97ba6550229a51be7da",
+    "path": "android/client/generated/wnfs-account.js",
+    "sha256": "376e9b8500b3a59f84050d84d851debfeee7705f6c52f94c149d833bc13c54c5"
   }
 }
