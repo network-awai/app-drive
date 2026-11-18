@@ -39,3 +39,27 @@ The host must verify membership, request identity and current revocations before
 discovering the authoritative heads on each request. The adapter does not
 declare a service endpoint. No production host currently supplies that
 contract, so the existing device-only cloud search remains in normal builds.
+
+### Two-device QA, 2026-11-18
+
+Drive revision `162be23` was built as an isolated QA APK, SHA-256
+`7c391ccc1949a6bbb7c274da1a85ed964e54fb7d881f4dfcc3787ce6afd1dbe1`.
+The QA build injects an in-process discovery provider and uses a loopback HTTPS
+pack store. Its certificate is confined to the debug app's localhost policy.
+The issuer uses WebCrypto Ed25519, available in Chrome and Android WebView 137
+and later for this path. [Chrome 137 support](https://developer.chrome.com/blog/chrome-137-beta#curve25519-in-web-cryptography).
+
+- 7735HS and moto g05 authorized through the public Awai approval page with one
+  virtual Passkey and distinct device keys. Both retained authorization after
+  restart. The 7735HS reached the approval relay through a QA-only TLS tunnel.
+- Each device synced a JPEG and an MP4 with a WNFS grant for the other device.
+  Both devices found each peer file using the appropriate Drive type filter.
+- After a second sync from 7735HS, moto g05 found the newer image from a fresh
+  signed response. A signed reply scoped to a different account caused zero
+  additional pack operations.
+
+The fixture issuer keeps only the latest head from each QA sync in memory. The
+production authorization policy, publication of current heads, and the live
+endpoint are still tracked in [AWAI-2901](https://linear.app/kotobalabs/issue/AWAI-2901).
+The [Figma redesign](https://www.figma.com/design/umqCqP5KSjLWh9fhCI1HaN?node-id=333-2)
+covers both Android sizes, authorization, empty results and unavailable heads.
