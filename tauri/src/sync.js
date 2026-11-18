@@ -58,3 +58,8 @@ export async function restore({legacy=false}={}){const s=await session();try{
  await invoke('vaultRestoreBegin');for(const r of rows){if(r.bytes.length===0)await invoke('vaultRestoreWrite',{path:r.path,offset:0,bytes:''});for(let at=0;at<r.bytes.length;at+=65531)await invoke('vaultRestoreWrite',{path:r.path,offset:at,bytes:b64(r.bytes.subarray(at,at+65531))});r.bytes.fill(0);}await invoke('vaultRestorePublish');return {files:rows.length};
  }finally{s.secret.fill(0);}}
 export async function state(){const s=await invoke('vaultStatus');return {...s,canEvict:!wnfsEnabled&&!s.wnfs,legacyRestore:wnfsEnabled&&s.wnfs&&s.legacy,synced:s.synced&&s.origin===syncOrigin,configured};}
+
+export async function inspectAuthorizedSnapshot(owner, expectedBasis, extension) {
+ if(!wnfsEnabled)throw Error('recovery-required');
+ return wnfs.inspect(owner,expectedBasis,extension);
+}

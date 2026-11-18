@@ -12,7 +12,9 @@
             [awai.wnfs.wire :as wire]
             [envelope.keystore :as keys]
             ["@noble/curves/abstract/modular" :as modular]
-            ["@awai/drive-wnfs-platform/cid" :refer [CID]]))
+            ["@awai/drive-wnfs-platform/cid" :refer [CID]]
+            ["@awai/drive-wnfs-platform/digest" :as digest]
+            ["@noble/hashes/sha256" :as sha]))
 
 (def snapshot-limit (* 32 1024 1024))
 (def pack-limit (* 12 1024 1024))
@@ -47,7 +49,9 @@
      :get-u8 get-block
      :put (fn [codec bytes]
             (let [bytes (blocks/u8 bytes)
-                  cid (blocks/cid-of codec bytes)]
+                  cid (do
+                        (when-not (and (#{85 113} codec) (<= (.-length bytes) 262144)) (refuse))
+                        (.createV1 CID codec (digest/create 18 (sha/sha256 bytes))))]
               (swap! entries assoc (.toString cid) {:cid cid :bytes bytes})
               cid))}))
 
@@ -199,9 +203,9 @@
                                (tree-sources rows) (js/Math.floor (/ (js/Date.now) 1000)))]
     (-> (capsule-pack record secret (:forest sealed) (:access sealed))
         (.then (fn [capsule]
-                 #js {:capsule capsule :packs (make-packs store (:forest sealed))})))))
+                 #js {:capsule capsule :packs (make-packs store (:forest sealed)) :basis (.toString (:forest sealed))})))))
 
-(defn- read-tree [record secret root capsule packs metadata-only?]
+(defn- read-snapshot [record secret root capsule packs metadata-only?]
   (-> (open-capsule record secret root capsule)
       (.then (fn [{:keys [forest access]}]
                (let [store (read-packs packs forest)
@@ -231,10 +235,15 @@
                                    (.push rows #js {:path path :chunks chunks})))
                                (refuse))))]
                    (visit access "" 0)
-                   rows))))))
+                   #js {:rows rows :basis (.toString forest)}))))))
 
-(defn open [record secret root capsule packs]
-  (read-tree record secret root capsule packs false))
+(defn open-snapshot [record secret root capsule packs]
+  (read-snapshot record secret root capsule packs false))
 
 (defn catalog [record secret root capsule packs]
-  (read-tree record secret root capsule packs true))
+  (-> (read-snapshot record secret root capsule packs true)
+      (.then (fn [snapshot] (.-rows snapshot)))))
+
+(defn open [record secret root capsule packs]
+  (-> (open-snapshot record secret root capsule packs)
+      (.then (fn [snapshot] (.-rows snapshot)))))

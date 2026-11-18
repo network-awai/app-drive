@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { runInThisContext } from 'node:vm';
+import { CID } from 'multiformats/cid';
 
 globalThis.window = globalThis;
 const wnfsEnabled = process.env.AWAI_DRIVE_WNFS_SYNC === '1';
@@ -28,10 +29,14 @@ test('WNFS copy snapshot carries more than 8 MiB across bounded CAR packs and re
     { path: 'empty', directory: true }
   ];
 
-  const { capsule, packs } = await wnfs.seal(identity, unlock, rows);
+  const { capsule, packs, basis } = await wnfs.seal(identity, unlock, rows);
+  assert.equal(CID.parse(basis).multihash.code, 0x12);
   assert.ok(packs.length > 1);
   assert.ok(packs.every(bytes => bytes.length <= 12 * 1024 * 1024));
-  const restored = await wnfs.open(identity, unlock, capsule.root, capsule.bytes, packs);
+  const snapshot = await wnfs.openSnapshot(identity, unlock, capsule.root, capsule.bytes, packs);
+  assert.equal(snapshot.basis, basis);
+  assert.deepEqual(wnfs.project(snapshot)(basis, 'JPG'), [['photos/test.jpg', image.length]]);
+  const restored = snapshot.rows;
   const byPath = new Map(restored.map(row => [row.path, row]));
   assert.equal(byPath.size, rows.length);
   for (const row of rows) {

@@ -42,3 +42,5 @@ Object.prototype.snapshotKey;
 Object.prototype.structure;
 Object.prototype.temporalKey;
 Object.prototype.version;
+Object.prototype.basis;
+Object.prototype.rows;

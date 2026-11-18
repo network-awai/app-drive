@@ -13,7 +13,9 @@ const unb64 = text => Uint8Array.from(atob(text), char => char.charCodeAt(0));
 function computeInWorker(operation, session, input, buffers) {
   const worker = new Worker('./wnfs-worker.js');
   const secret = session.secret.slice();
+  let timeout;
   return new Promise((resolve, reject) => {
+    timeout = setTimeout(() => reject(Error("wnfs-worker-timeout")), 120000);
     worker.onmessage = ({ data }) => {
       if (data.error) reject(Error(data.error));
       else resolve(data.result);
@@ -23,6 +25,7 @@ function computeInWorker(operation, session, input, buffers) {
     worker.postMessage({ operation, record: session.record, secret, ...input },
       [secret.buffer, ...buffers]);
   }).finally(() => {
+    clearTimeout(timeout);
     if (secret.byteLength) secret.fill(0);
     worker.terminate();
   });
@@ -53,7 +56,7 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
     }
   }
 
-  async function readSnapshot(session, operation) {
+  async function readSnapshot(session, operation, extension) {
     const head = session.wnfs;
     if (head?.schema !== 'awai.drive.wnfs.v1' || head.origin !== origin ||
         !PACK_ID.test(head.root) || !PACK_ID.test(head.capsule) || !Array.isArray(head.packs) ||
@@ -62,8 +65,10 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
         new Set([head.capsule, ...head.packs]).size !== head.packs.length + 1) {
       throw Error('recovery-required');
     }
+    const started = performance.now();
     const capsule = await packs.download(head.capsule);
     if (capsule.length > 262144) throw Error('invalid-wnfs-snapshot');
+    const capsuleBytes = capsule.length;
     const data = [];
     let size = 0;
     for (const id of head.packs) {
@@ -72,8 +77,11 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
       if (size > 4 * PACK_BYTES) throw Error('invalid-wnfs-snapshot');
       data.push(pack);
     }
-    return compute(operation, session, { root: head.root, capsule, packs: data },
+    const fetched = performance.now();
+    const snapshot = await compute(operation, session, { root: head.root, capsule, packs: data, extension },
       [capsule.buffer, ...data.map(pack => pack.buffer)]);
+    if (Array.isArray(snapshot)) return snapshot;
+    return { ...snapshot, fetchMs: fetched - started, openMs: performance.now() - fetched, bytes: size + capsuleBytes };
   }
 
   return {
@@ -99,13 +107,18 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
           }
           if (await sha256(bytes) !== entry.sha256) throw Error('source-size-changed');
         }
+        const sealStart = performance.now();
         const sealed = await compute('seal', session, { rows },
           rows.flatMap(row => row.bytes ? [row.bytes.buffer] : []));
+        const publishStart = performance.now();
+        const packBytes = sealed.packs.reduce((n, pack) => n + pack.length, sealed.capsule.bytes.length);
         const dataIds = [];
         for (const pack of sealed.packs) dataIds.push(await packs.publish(pack, verifyReceipt));
         const capsule = await packs.publish(sealed.capsule.bytes, verifyReceipt);
+        const publishedAt = performance.now();
         await invoke('vaultWnfsCommit', { root: sealed.capsule.root, capsule, packs: dataIds, origin, entries });
-        return { files: rows.filter(row => !row.directory).length };
+        return { files: rows.filter(row => !row.directory).length, basis: sealed.basis,
+          bytes: packBytes, dataPacks: dataIds.length, sealMs: publishStart - sealStart, publishMs: publishedAt - publishStart };
       } finally {
         for (const row of rows) if (row.bytes?.byteLength) row.bytes.fill(0);
       }
@@ -113,7 +126,23 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
 
     catalog: session => readSnapshot(session, 'catalog'),
     async restore(session) {
-      return restoreCopy(await readSnapshot(session, 'open'));
+      const snapshot = await readSnapshot(session, 'open', 'txt');
+      // The production worker returns basis and query results with the
+      // decrypted rows. Preserve old callers that supply only an array.
+      if (Array.isArray(snapshot)) return restoreCopy(snapshot);
+      const { rows, ...verified } = snapshot;
+      const started = performance.now();
+      const published = await restoreCopy(rows);
+      return { ...published, ...verified, publishMs: performance.now() - started };
+    },
+
+    async inspect(session, expectedBasis, extension) {
+      if (typeof expectedBasis !== 'string' || !expectedBasis || typeof extension !== 'string' || extension.length > 48) {
+        throw Error('invalid-snapshot-query');
+      }
+      const snapshot = await readSnapshot(session, 'inspect', extension);
+      if (snapshot.basis !== expectedBasis) throw Error('snapshot-basis-mismatch');
+      return snapshot;
     }
   };
 }
