@@ -71,6 +71,29 @@ test('WNFS copy snapshot carries more than 8 MiB across bounded CAR packs and re
   unlock.fill(0);
 });
 
+test('a distinct owner and recipient share a basis, and a revoked recipient cannot open a new forest', { skip: !wnfsEnabled }, async () => {
+  const { AwaiDriveEncrypted: owner, AwaiDriveWnfs: wnfs } = globalThis;
+  const alice = crypto.getRandomValues(new Uint8Array(32));
+  const bob = crypto.getRandomValues(new Uint8Array(32));
+  try {
+    const a = await owner.newRecord(alice), b = await owner.newRecord(bob);
+    const recipient = await wnfs.publicRecipient(b);
+    assert.deepEqual(Object.keys(recipient).sort(), ['id', 'pq', 'pub']);
+    const first = await wnfs.seal(a, alice, [{ path: 'first.txt', bytes: Uint8Array.of(1, 2) }], [recipient]);
+    const { capsule } = first.grants[0];
+    const opened = await wnfs.openSnapshot(b, bob, capsule.root, capsule.bytes, first.packs);
+    assert.equal(opened.basis, first.basis);
+    assert.deepEqual(wnfs.inventory(opened.rows), [{ path: 'first.txt', directory: false, size: 2, sha256: sha(Uint8Array.of(1, 2)) }]);
+    await assert.rejects(wnfs.open(a, alice, capsule.root, capsule.bytes, first.packs));
+    const next = await wnfs.seal(a, alice, [{ path: 'next.txt', bytes: Uint8Array.of(3) }], []);
+    assert.equal(next.grants.length, 0);
+    assert.notEqual(next.basis, first.basis);
+    await assert.rejects(wnfs.open(b, bob, next.capsule.root, next.capsule.bytes, next.packs));
+    await assert.rejects(wnfs.open(b, bob, capsule.root, capsule.bytes, next.packs));
+    assert.equal((await wnfs.openSnapshot(b, bob, capsule.root, capsule.bytes, first.packs)).basis, first.basis);
+  } finally { alice.fill(0); bob.fill(0); }
+});
+
 test('Drive only commits WNFS after all readbacks, and restores into a staged copy', async () => {
   const { createWnfsSync } = await import('../src/wnfs-sync.js');
   const { createDrivePackClient } = await import('../vendor/platform/drive-packs.mjs');
@@ -99,15 +122,21 @@ test('Drive only commits WNFS after all readbacks, and restores into a staged co
     sha256: sha,
     async invoke(op, args) {
       nativeOps.push(op);
+      if (op === 'vaultWnfsRecipients') return { revision: 0, items: {} };
       if (op === 'vaultWnfsInventory') return { entries: [media] };
       if (op === 'vaultRead') return { bytes: Buffer.from(bytes).toString('base64') };
       if (op === 'vaultWnfsCommit') committed = args;
+      if (op === 'vaultWnfsRestoreBegin') return { operation: 'stage-test' };
       if (op === 'vaultWnfsRestoreWrite') {
+        assert.equal(args.operation, 'stage-test');
         assert.equal(args.path, media.path);
         assert.equal(args.offset, 0);
         assert.deepEqual(Buffer.from(args.bytes, 'base64'), Buffer.from(bytes));
       }
-      if (op === 'vaultWnfsRestorePublish') return { folder: 'Recovered test' };
+      if (op === 'vaultWnfsRestorePublish') {
+        assert.equal(args.operation, 'stage-test');
+        return { folder: 'Recovered test' };
+      }
     },
     async compute(operation) {
       if (operation === 'seal') return {

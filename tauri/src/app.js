@@ -1,3 +1,4 @@
+import { mountWnfsSharing } from './share-controls.js';
 import {bind_native} from './awai-ui/index.js';
 bind_native(document.documentElement,{tonal:'.tonal,.secondary',text:'#files button'});
 import*as encryptedSync from'./sync.js';
@@ -118,7 +119,8 @@ $('folder').onclick=()=>edit('mkdir');$('note').onclick=()=>edit('createText');$
 $('entry').onsubmit=e=>{e.preventDefault();if(!core.validName($('name').value)){$('form-error').textContent=t('error.invalid-name');return;}task(async()=>{await call(mode,{name:$('name').value,text:$('content').value});$('edit').close();await list();message(t('status.saved'));});};
 await task(async()=>{await host.initialize();await list();});
 
-$('sync').onclick=()=>task(async()=>{message(t('sync.busy'));await encryptedSync.sync();await list();$('storage').textContent=t('sync.ready');message(t('sync.success'));});
+const showGrants = mountWnfsSharing($('sync').parentElement, encryptedSync, task, encryptedSync.sharingEnabled, list);
+$('sync').onclick=()=>task(async()=>{message(t('sync.busy'));showGrants(await encryptedSync.sync());await list();$('storage').textContent=t('sync.ready');message(t('sync.success'));});
 async function restoreFiles(legacy=false) {
   message(t('sync.restoring'));
   const result=await encryptedSync.restore({legacy});
