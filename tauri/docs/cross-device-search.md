@@ -24,3 +24,18 @@ connecting work is tracked in
 [AWAI-3099](https://linear.app/kotobalabs/issue/AWAI-3099) and depends on the
 existing account binding ([AWAI-2898](https://linear.app/kotobalabs/issue/AWAI-2898)),
 authenticated head discovery, and an owner-custody grant handoff.
+
+## Signed discovery response
+
+The recipient-based adapter in `src/sync.js` verifies a short-lived compact
+Ed25519 JWS from a configured, independently authenticated host. The response
+echoes the one-time challenge, account DID, Android device DID, and WNFS
+recipient ID. It carries an expiry, authority policy epoch, and recipient
+capsules for the authorized source devices. The trust key comes from the host
+configuration. The app checks expiry before each pack read and rejects an
+unverified forest basis even after successful decryption.
+
+The host must verify membership, request identity and current revocations before
+discovering the authoritative heads on each request. The adapter does not
+declare a service endpoint. No production host currently supplies that
+contract, so the existing device-only cloud search remains in normal builds.

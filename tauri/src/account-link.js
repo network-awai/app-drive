@@ -29,6 +29,7 @@ export function createDriveAccountLink({call, approve}) {
 
   return {
     linkedAccount,
+    linkedDevice: () => getDeviceDid('accountPublic'),
     async begin() {
       const deviceDid = await getDeviceDid('accountPrepare');
       const {request, privateKey} = await createLinkRequest(deviceDid, Date.now(), DRIVE_PASSKEY_PURPOSE);

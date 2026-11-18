@@ -72,31 +72,35 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
     }
   }
 
-  async function readSnapshot(session, operation, extension) {
+  async function readSnapshot(session, operation, extension, guard) {
     const head = session.wnfs;
     validateHead(head);
     const started = performance.now();
+    guard?.();
     const capsule = await packs.download(head.capsule);
     if (capsule.length > 262144) throw Error('invalid-wnfs-snapshot');
     const capsuleBytes = capsule.length;
     const data = [];
     let size = 0;
     for (const id of head.packs) {
+      guard?.();
       const pack = await packs.download(id);
       size += pack.length;
       if (size > 4 * PACK_BYTES) throw Error('invalid-wnfs-snapshot');
       data.push(pack);
     }
+    guard?.();
     const fetched = performance.now();
     const snapshot = await compute(operation, session, { root: head.root, capsule, packs: data, extension },
       [capsule.buffer, ...data.map(pack => pack.buffer)]);
+    guard?.();
     if (Array.isArray(snapshot)) return snapshot;
     return { ...snapshot, fetchMs: fetched - started, openMs: performance.now() - fetched, bytes: size + capsuleBytes };
   }
 
   // The owner host supplies these grants after authenticating the account,
   // confirming device authorization and binding the stored heads to it.
-  async function catalogAuthorizedAccount({ subject, sources }) {
+  async function catalogAuthorizedAccount({ subject, sources }, guard) {
     if (typeof subject !== 'string' || !SUBJECT.test(subject) || !Array.isArray(sources) ||
         sources.length > MAX_ACCOUNT_SOURCES) throw Error('invalid-account-snapshot-grant');
     const deviceIds = new Set();
@@ -118,7 +122,7 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
     }));
     try {
       for (const { owner, deviceId, basis } of admitted) {
-        const catalog = await readSnapshot(owner, 'catalog');
+        const catalog = await readSnapshot(owner, 'catalog', undefined, guard);
         if (catalog.basis !== basis) throw Error('snapshot-basis-mismatch');
         for (const { path, directory = false } of catalog.rows) {
           entries.push({ path, directory, sourceDevice: deviceId });
@@ -202,7 +206,7 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
     },
 
     catalogAuthorizedAccount,
-    async catalogAccountRecipients(session, {subject, sources}) {
+    async catalogAccountRecipients(session, {subject, sources}, guard) {
       if (!Array.isArray(sources) || sources.length > MAX_ACCOUNT_SOURCES) {
         throw Error('invalid-account-snapshot-grant');
       }
@@ -215,7 +219,7 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
         return {subject: source.subject, deviceId: source.deviceId, basis: grant.basis,
           owner: {record: session.record, secret: session.secret, wnfs: grant.head}};
       });
-      return catalogAuthorizedAccount({subject, sources: admitted});
+      return catalogAuthorizedAccount({subject, sources: admitted}, guard);
     },
 
     async restore(session) {
