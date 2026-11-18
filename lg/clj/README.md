@@ -45,3 +45,23 @@ cd 60-apps/etzhayyim-project-drive/lg
 kbb run_tests.cljk      # 13 tests / 38 assertions (8 ported handler + 5 graph/server)
 kbb -M:serve              # httpkit XRPC server on :8000 (PORT overrides), kotoba-backed
 ```
+
+## Drive v3 metadata adapter
+
+The existing host-scoped Drive service also accepts the following HTTP routes:
+
+| Route | Supported request |
+| --- | --- |
+| `GET /drive/v3/files` | Metadata list. `q` supports parent membership, `trashed`, `starred`, and `name contains` prefix matching, joined by `and`. `orderBy` supports one `name` or `modifiedTime` key with optional `asc` or `desc`. Pagination uses `pageSize` and `pageToken`. |
+| `GET /drive/v3/files/{fileId}` | Metadata lookup. Select supported scalar fields with `fields`, and use the default JSON response or `alt=json`. |
+
+For list field selection, use e.g. `fields=nextPageToken,files(id,name,mimeType)`.
+Page cursors are bound to the query and ordering. Restart pagination after a
+token error. A change to the underlying store can affect the next page.
+
+The host must configure an API key. Callers supply that key in `X-API-Key`.
+The service uses its existing DriveStore and its host access boundary. The
+Android app's local files and WNFS snapshots have a separate custody boundary.
+Google OAuth, shared drives, media transfer and mutations are outside this
+metadata profile. Unsupported filters, parameters and field selections fail
+explicitly. No production routing change is required to run the host test.

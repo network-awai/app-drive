@@ -19,6 +19,7 @@
   (:require [cheshire.core :as json]
             [kotoba.lang.text :as str]
             [lg-drive.handlers :as h]
+            [lg-drive.google-drive :as google]
             [lg-drive.kotoba-datomic :as kd]
             [lg-drive.store :as store])
   (:import [java.net URLDecoder]))
@@ -39,10 +40,12 @@
     {}
     (into {}
           (for [pair (str/split qs #"&")
-                :let [[k v] (str/split pair #"=" 2)]
+                :let [separator (.indexOf ^String pair "=")
+                      k (if (neg? separator) pair (subs pair 0 separator))
+                      v (if (neg? separator) "" (subs pair (inc separator)))]
                 :when (seq k)]
             [(URLDecoder/decode k "UTF-8")
-             (URLDecoder/decode (or v "") "UTF-8")]))))
+             (URLDecoder/decode v "UTF-8")]))))
 
 ;; ── pure dispatch ─────────────────────────────────────────────────────────────
 
@@ -57,6 +60,11 @@
     (cond
       (and (= method :get) (#{"/health" "/ok"} path))
       {:status 200 :json {"ok" true "app" "lg-drive" "ts" (System/currentTimeMillis)}}
+
+      (or (= path google/files-path) (str/starts-with? path (str google/files-path "/")))
+      (google/route st method path query (and (seq expected-api-key)
+                                             (not (str/blank? expected-api-key))
+                                             (= expected-api-key x-api-key)))
 
       (str/starts-with? path xrpc-prefix)
       (try
@@ -87,14 +95,14 @@
     (let [method (keyword (name (or request-method :get)))
           parsed-body (when body
                         (try (json/parse-string (slurp body)) (catch Exception _ nil)))
-          {:keys [status json]} (route st {:method method
+          {:keys [status json] :as response} (route st {:method method
                                            :path uri
                                            :query (parse-query query-string)
                                            :body parsed-body
                                            :expected-api-key expected-api-key
                                            :x-api-key (get headers "x-api-key")})]
       {:status status
-       :headers {"Content-Type" "application/json"}
+       :headers (merge {"Content-Type" "application/json"} (:headers response))
        :body (json/generate-string json)})))))
 
 (defn run-server-with [run-server port st expected-api-key http-post]

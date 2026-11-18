@@ -12,7 +12,8 @@
 
 (def suites
   '[lg-drive.test-handlers
-    lg-drive.test-graph])
+    lg-drive.test-graph
+    lg-drive.test-google-drive])
 
 (apply require suites)
 
