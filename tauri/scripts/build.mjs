@@ -13,7 +13,7 @@ const descriptor=runtimeFor(origin);
 // receipt signed by one of these keys; rotating the service key needs a rebuild. Other origins get none.
 const trust=JSON.parse(await readFile(resolve(app,'receipt-trust.json'),'utf8')),receiptKeys=origin&&Object.hasOwn(trust,origin)?trust[origin]:null;
 if(receiptKeys&&!(Array.isArray(receiptKeys.keys)&&receiptKeys.keys.length))throw Error('empty receipt key set');
-await writeFile(resolve(out,'sync-config.js'),`export const syncOrigin=${JSON.stringify(origin)};export const receiptKeys=${JSON.stringify(receiptKeys)};`);
+await writeFile(resolve(out,'sync-config.js'),`export const syncOrigin=${JSON.stringify(origin)};export const receiptKeys=${JSON.stringify(receiptKeys)};export const wnfsWrite=${process.env.AWAI_DRIVE_WNFS === '1'};`);
 const {clientRuntimeProblems,clientRuntimeConnectSrc}=await import('../vendor/platform/kotoba-client-runtime.js');
 if(clientRuntimeProblems(descriptor,['awai.drive.sync'],'http://tauri.localhost').length)throw Error('invalid sync descriptor');
 const tauriFile=resolve(app,'src-tauri/tauri.conf.json'),config=JSON.parse(await readFile(tauriFile));

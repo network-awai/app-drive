@@ -81,7 +81,7 @@
                                                          (.then #(swap! files conj {:name path :size (.-length bytes) :sha h :object %})))))))))
                        (.then (fn [_] (object! objects owner
                                               (utf8 (pr-str {:schema :awai.owner/private-manifest-v1 :owner (:recipient-key owner)
-                                                             :files @files :drive/directories (vec (or (.-directories rows) #js [])) :source-manifest "{\"schema\":\"awai.drive.snapshot.v1\"}"})))))
+                                                             :files @files :drive/profile (or (aget rows "profile") "owner-store-v1") :drive/directories (vec (or (.-directories rows) #js [])) :source-manifest "{\"schema\":\"awai.drive.snapshot.v1\"}"})))))
                        (.then (fn [root]
                                 (let [cid #(car/cid-bytes car/codec-raw (unhex %))
                                       bytes (u8 (car/carv1-encode {:roots [(cid root)]
@@ -113,5 +113,5 @@
                                             (.then (fn [b] (when-not (= (:size r) (.-length b)) (refuse))
                                                      (-> (sha b) (.then (fn [h] (when-not (= h (:sha r)) (refuse))
                                                                          (.push out #js {:path (:name r) :bytes b :sha256 h})))))))))
-                                    (.then (fn [_] (let [dirs (or (:drive/directories m) [])] (when-not (and (vector? dirs) (<= (count dirs) 1000) (every? #(and (d/valid-path? %) (seq %)) dirs)) (refuse)) (aset out "directories" (clj->js dirs)) out)))))))
+                                    (.then (fn [_] (let [dirs (or (:drive/directories m) [])] (when-not (and (vector? dirs) (<= (count dirs) 1000) (every? #(and (d/valid-path? %) (seq %)) dirs)) (refuse)) (aset out "directories" (clj->js dirs)) (aset out "profile" (or (:drive/profile m) "owner-store-v1")) out)))))))
                      (.finally #(wipe! identity))))))))
