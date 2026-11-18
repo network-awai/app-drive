@@ -38,6 +38,11 @@ function renderEntries(entries, showLocation = false, cloud = false) {
       location.textContent = item.path.split('/').slice(0, -1).join('/') || t(cloud ? 'search.cloud' : 'storage.root');
       content.append(location);
     }
+    if (cloud && item.sourceDevice) {
+      const source = document.createElement('small');
+      source.textContent = t('search.source-device', { device: item.sourceDevice });
+      content.append(source);
+    }
     if (cloud) content.className = 'cloud-entry';
     else content.onclick = () => task(async () => {
       if (item.directory) {

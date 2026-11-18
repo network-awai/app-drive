@@ -44,6 +44,7 @@ export function searchCatalog(query, kind, catalog) {
   const needle = searchKey(query.trim());
   const entries = catalog.map(item => ({ ...item, name: item.path.split('/').at(-1) }))
     .filter(item => matches(needle, kind, item))
-    .sort((a, b) => a.path.localeCompare(b.path));
+    .sort((a, b) => a.path.localeCompare(b.path) ||
+      (a.sourceDevice ?? '').localeCompare(b.sourceDevice ?? ''));
   return { entries: entries.slice(0, maxResults), limited: entries.length > maxResults };
 }

@@ -59,7 +59,8 @@ test('WNFS copy snapshot carries more than 8 MiB across bounded CAR packs and re
   await assert.rejects(wnfs.open(identity, unlock, capsule.root, capsule.bytes, [torn, ...packs.slice(1)]));
   const prior = await legacy.openSnapshot(identity, unlock, previous.root, previous.bytes);
   assert.deepEqual(prior[0].bytes, old[0].bytes);
-  const catalog = await wnfs.catalog(identity, unlock, capsule.root, capsule.bytes, packs);
+  const { rows: catalog, basis: catalogBasis } = await wnfs.catalog(identity, unlock, capsule.root, capsule.bytes, packs);
+  assert.equal(catalogBasis, basis);
   assert.deepEqual(catalog.map(row => row.path).sort(), rows.map(row => row.path).sort());
   assert.ok(catalog.every(row => !Object.hasOwn(row, 'chunks')));
   assert.equal(catalog.find(row => row.path === 'empty').directory, true);
@@ -128,4 +129,56 @@ test('Drive only commits WNFS after all readbacks, and restores into a staged co
   const count = nativeOps.length;
   assert.deepEqual(await sync.restore({ wnfs: head }), { folder: 'Recovered test' });
   assert.deepEqual(nativeOps.slice(count), ['vaultWnfsRestoreBegin', 'vaultWnfsRestoreWrite', 'vaultWnfsRestorePublish']);
+});
+
+test('account catalog requires bound sources and reports only verified snapshot metadata', async () => {
+  const { createWnfsSync } = await import('../src/wnfs-sync.js');
+  const origin = 'https://storage.example';
+  const subject = 'did:pkh:eip155:8453:0x1';
+  const basis = 'b' + 'a'.repeat(58);
+  const otherBasis = 'b' + 'b'.repeat(58);
+  const ids = n => n.repeat(64);
+  const grants = [
+    { subject, deviceId: 'desktop', basis, owner: { record: 'fixture-key-a', secret: new Uint8Array(32),
+      wnfs: { schema: 'awai.drive.wnfs.v1', origin, root: ids('a'), capsule: ids('b'), packs: [ids('c')] } } },
+    { subject, deviceId: 'phone', basis: otherBasis, owner: { record: 'fixture-key-b', secret: new Uint8Array(32),
+      wnfs: { schema: 'awai.drive.wnfs.v1', origin, root: ids('d'), capsule: ids('e'), packs: [ids('f')] } } },
+  ];
+  const requests = [];
+  let denied;
+  const wnfs = createWnfsSync({
+    origin,
+    invoke: () => assert.fail('Catalog cannot mutate either vault'),
+    packs: { async download(id) {
+      requests.push(id);
+      if (id === denied) throw Error('operation-denied');
+      return Uint8Array.of(1);
+    } },
+    async compute(operation, owner) {
+      assert.equal(operation, 'catalog');
+      const a = owner.record === 'fixture-key-a';
+      return { basis: a ? basis : otherBasis, rows: [{ path: a ? 'trip/sky.jpg' : 'trip/ball.mp4' }] };
+    }
+  });
+  assert.deepEqual(await wnfs.catalogAuthorizedAccount({ subject, sources: grants }), [
+    { path: 'trip/sky.jpg', directory: false, sourceDevice: 'desktop' },
+    { path: 'trip/ball.mp4', directory: false, sourceDevice: 'phone' },
+  ]);
+  assert.deepEqual(requests, [ids('b'), ids('c'), ids('e'), ids('f')]);
+  requests.length = 0;
+  await assert.rejects(wnfs.catalogAuthorizedAccount({ subject, sources: [grants[0], { ...grants[1], subject: 'did:key:other' }] }),
+    /invalid-account-snapshot-grant/);
+  await assert.rejects(wnfs.catalogAuthorizedAccount({ subject, sources: [grants[0], grants[0]] }),
+    /invalid-account-snapshot-grant/);
+  await assert.rejects(wnfs.catalogAuthorizedAccount({ subject, sources: [grants[0], {
+    ...grants[1], owner: { ...grants[1].owner, wnfs: { ...grants[1].owner.wnfs, origin: 'https://other.example' } }
+  }] }), /recovery-required/);
+  assert.deepEqual(requests, []);
+  await assert.rejects(wnfs.catalogAuthorizedAccount({ subject, sources: [{ ...grants[0], basis: otherBasis }, grants[1]] }),
+    /snapshot-basis-mismatch/);
+  assert.deepEqual(requests, [ids('b'), ids('c')]);
+  requests.length = 0;
+  denied = ids('e');
+  await assert.rejects(wnfs.catalogAuthorizedAccount({ subject, sources: grants }), /operation-denied/);
+  assert.deepEqual(requests, [ids('b'), ids('c'), ids('e')]);
 });
