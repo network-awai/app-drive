@@ -1,0 +1,118 @@
+{
+  "awaiOs": {
+    "repository": "https://github.com/network-awai/awai-os",
+    "revision": "540674c835b67f5c2f4209627c3f589063558e7f",
+    "files": {
+      "host.js": {
+        "path": "packages/awai-shell/host.js",
+        "sha256": "71c8c1e155aa2eeafd24baca51472c73e53ddba52a0e16cc043efb292626e873"
+      },
+      "awai-ui/.gitignore": {
+        "path": "packages/awai-ui/.gitignore",
+        "sha256": "48a77a775243943379b6c93e0ac068c8a06a9c557674e92c1d9c7286867687dd"
+      },
+      "awai-ui/LICENSE": {
+        "path": "packages/awai-ui/LICENSE",
+        "sha256": "bf06f1cdf2de187c89c775d9faf23a225cceae915fff674dea44660698675ad5"
+      },
+      "awai-ui/README.md": {
+        "path": "packages/awai-ui/README.md",
+        "sha256": "efb54fc78b76c3af4e4a25f3132ace139b5f0dec9f2855187f81824af3de35cb"
+      },
+      "awai-ui/assets/apps.svg": {
+        "path": "packages/awai-ui/assets/apps.svg",
+        "sha256": "91439675adc58dd01e25bb1f797da7528a1519fc346e3e918f85d6de4359314b"
+      },
+      "awai-ui/assets/download.svg": {
+        "path": "packages/awai-ui/assets/download.svg",
+        "sha256": "f3921e1c96d85c24ff36a330acbfe1c3bd46699abb56fc86db10dfc419f4273f"
+      },
+      "awai-ui/assets/font-OFL.txt": {
+        "path": "packages/awai-ui/assets/font-OFL.txt",
+        "sha256": "babcfe66c8a098b2fa279bc724a3a342f8124f77ce18941fbcc1bbb39823cded"
+      },
+      "awai-ui/assets/noto-jp.woff2": {
+        "path": "packages/awai-ui/assets/noto-jp.woff2",
+        "sha256": "ed85d35a7db01e551510e0973745c17315c03ea01742d82b2bf8e5ac3bf76038"
+      },
+      "awai-ui/assets/search.svg": {
+        "path": "packages/awai-ui/assets/search.svg",
+        "sha256": "10a8cceeffe565174c23d83d671eb7acd5ca989038fb476d2281e2b432c01259"
+      },
+      "awai-ui/assets/store.svg": {
+        "path": "packages/awai-ui/assets/store.svg",
+        "sha256": "5719e425c3870756336ea641dfe4fdeb6dabf52c4abe9d2d83528627c50ab37e"
+      },
+      "awai-ui/build/awai/build.cljs": {
+        "path": "packages/awai-ui/build/awai/build.cljs",
+        "sha256": "d67c4f9196c4f68ce3a3208b5187f7c92d7345eb1a39b40f0433f2d38c5a8275"
+      },
+      "awai-ui/design-map.json": {
+        "path": "packages/awai-ui/design-map.json",
+        "sha256": "116ede00fbd039821da4b86f55f3e369ed8e84d8098ba1780dcf41715e160a3c"
+      },
+      "awai-ui/distribute.mjs": {
+        "path": "packages/awai-ui/distribute.mjs",
+        "sha256": "95f265136ab03d315615546d4ea6994113bb19d8048a635b7e8387ee0b48c639"
+      },
+      "awai-ui/examples/gallery.html": {
+        "path": "packages/awai-ui/examples/gallery.html",
+        "sha256": "98a53f4d9d1108a37979703ef2c720de88fad826147e7ffa8002b6ae444ddf8c"
+      },
+      "awai-ui/package-lock.json": {
+        "path": "packages/awai-ui/package-lock.json",
+        "sha256": "13ed717ba3c9e5a7d204d33e05a37411e83b4ce78af1517557c6fc28bb74ee67"
+      },
+      "awai-ui/package.json": {
+        "path": "packages/awai-ui/package.json",
+        "sha256": "7e38a91f8da21cd72e600eb4a4910f0caba6ff2648d80d6f1f3d4f30676772b2"
+      },
+      "awai-ui/squint.edn": {
+        "path": "packages/awai-ui/squint.edn",
+        "sha256": "2113b351c648795194bd99386dd27a98bb9e74bab44870bc04dfa143f5e415c7"
+      },
+      "awai-ui/src/awai/dom.cljs": {
+        "path": "packages/awai-ui/src/awai/dom.cljs",
+        "sha256": "c76166e928c6569a2fc3ae1a255df940a2a816f5ed5b6036cd8d9822f9f62e57"
+      },
+      "awai-ui/src/awai/index.cljs": {
+        "path": "packages/awai-ui/src/awai/index.cljs",
+        "sha256": "ab5c0cf6978d09b3d34e5f64b61f1dd1c97b335e655db6ce83482f01a6d35802"
+      },
+      "awai-ui/src/awai/native.cljs": {
+        "path": "packages/awai-ui/src/awai/native.cljs",
+        "sha256": "0804b1634c4c23f331330e0e2ad83c0137713aa0f0cc091c96a6964238918010"
+      },
+      "awai-ui/src/awai/ui.cljc": {
+        "path": "packages/awai-ui/src/awai/ui.cljc",
+        "sha256": "a8e68840ba229eb3ff1f37529378e2a40429b5aea7f5091dba8683a68d4ec24e"
+      },
+      "awai-ui/src/awai/ui.css": {
+        "path": "packages/awai-ui/src/awai/ui.css",
+        "sha256": "2643627cac50c42a9c4338b51bbff0cf3e025160f3f48d378bd49248263d0103"
+      },
+      "awai-ui/test/components.test.mjs": {
+        "path": "packages/awai-ui/test/components.test.mjs",
+        "sha256": "0a7e11cb9399d97f5b48eb6910775e1a985a1749d476589955682a26b126d72c"
+      },
+      "awai-ui/tokens/figma-android-v2.json": {
+        "path": "packages/awai-ui/tokens/figma-android-v2.json",
+        "sha256": "10f6612a4a26cb7a297253eaeaddfc2dc4ec12b13d9b4718840cd7a39c70b033"
+      },
+      "awai-ui/tokens/figma-hiru.json": {
+        "path": "packages/awai-ui/tokens/figma-hiru.json",
+        "sha256": "b75f8aeb5e045cff5baee7496cbd02b803f8bbbb3f7b526c87568e2ad4e565fb"
+      },
+      "awai-ui/verification.json": {
+        "path": "packages/awai-ui/verification.json",
+        "sha256": "30cbf328a7d5bd3153b71f19f738afc2acc86c88317258f79639fc0d319e6d13"
+      }
+    }
+  },
+  "runtime": {
+    "repository": "https://github.com/kotoba-lang/kotoba",
+    "revision": "1c9564cb79ca5d2f1e0f39b3d5c7bdf1a7ed1f9b",
+    "path": "lib/kotoba.wasmWebcomponent/src/kotoba-client-runtime.js",
+    "sha256": "de5e684e2c10430e8317dcbb60784fa65db30c8da8832b79665c15f7d3fefac6"
+  }
+}
