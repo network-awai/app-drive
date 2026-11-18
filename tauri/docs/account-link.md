@@ -20,6 +20,11 @@ refused. This proves account and device linkage. Authenticated head discovery,
 recipient-key authorization and production account search still need their
 own service and acceptance. No device unlock key is handed off.
 
+`catalogVerifiedRecipientHeads` is the read adapter for the future trusted
+head provider. It matches the locally verified account DID and decrypts only
+grants for the reader's own WNFS recipient key. It expects the provider to
+authenticate membership and establish the latest storage head for each device.
+
 The vendored `account-link-core.js` is the ES module bundle of the
 `otehon/shell/src/identity/link.js` source in the pinned Awai OS revision. From
 that revision run `npm ci` in `otehon/shell` and bundle with its pinned esbuild:

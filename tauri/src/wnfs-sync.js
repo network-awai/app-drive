@@ -36,24 +36,26 @@ function computeInWorker(operation, session, input, buffers) {
 }
 
 export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, compute = computeInWorker }) {
-  async function restoreCopy(rows, legacy = false) {
+  async function restoreCopy(rows, legacy = false, shared) {
+    let operation;
     try {
-      await invoke('vaultWnfsRestoreBegin', { legacy });
+      ({ operation } = await invoke('vaultWnfsRestoreBegin', { legacy, ...shared }));
+      if (!operation) throw Error('restore-operation-missing');
       for (const { path, directory, chunks } of rows) {
         if (directory) continue;
         let offset = 0;
         for (const chunk of chunks) {
           for (let start = 0; start < chunk.length; start += CHUNK_BYTES) {
             const piece = chunk.subarray(start, start + CHUNK_BYTES);
-            await invoke('vaultWnfsRestoreWrite', { path, offset, bytes: b64(piece) });
+            await invoke('vaultWnfsRestoreWrite', { operation, path, offset, bytes: b64(piece) });
             offset += piece.length;
           }
         }
-        if (offset === 0) await invoke('vaultWnfsRestoreWrite', { path, offset: 0, bytes: '' });
+        if (offset === 0) await invoke('vaultWnfsRestoreWrite', { operation, path, offset: 0, bytes: '' });
       }
-      return await invoke('vaultWnfsRestorePublish', { legacy });
+      return await invoke('vaultWnfsRestorePublish', { operation });
     } catch (error) {
-      await invoke('vaultWnfsRestoreAbort').catch(() => {});
+      if (operation) await invoke('vaultWnfsRestoreAbort', { operation }).catch(() => {});
       throw error;
     } finally {
       for (const { chunks = [] } of rows) for (const chunk of chunks) chunk.fill(0);
@@ -92,10 +94,66 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
     return { ...snapshot, fetchMs: fetched - started, openMs: performance.now() - fetched, bytes: size + capsuleBytes };
   }
 
+  // The owner host supplies these grants after authenticating the account,
+  // confirming device authorization and binding the stored heads to it.
+  async function catalogAuthorizedAccount({ subject, sources }) {
+    if (typeof subject !== 'string' || !SUBJECT.test(subject) || !Array.isArray(sources) ||
+        sources.length > MAX_ACCOUNT_SOURCES) throw Error('invalid-account-snapshot-grant');
+    const deviceIds = new Set();
+    for (const source of sources) {
+      if (source?.subject !== subject || typeof source.deviceId !== 'string' || !DEVICE_ID.test(source.deviceId) ||
+          deviceIds.has(source.deviceId) || typeof source.basis !== 'string' || !BASIS_ID.test(source.basis) ||
+          typeof source.owner?.record !== 'string' || !source.owner.record || source.owner.record.length > 16000 ||
+          !(source.owner.secret instanceof Uint8Array) || source.owner.secret.length !== 32) {
+        throw Error('invalid-account-snapshot-grant');
+      }
+      validateHead(source.owner.wnfs);
+      deviceIds.add(source.deviceId);
+    }
+    const entries = [];
+    const admitted = sources.map(({ owner, deviceId, basis }) => ({
+      deviceId, basis,
+      owner: { record: owner.record, secret: owner.secret.slice(),
+        wnfs: { ...owner.wnfs, packs: [...owner.wnfs.packs] } }
+    }));
+    try {
+      for (const { owner, deviceId, basis } of admitted) {
+        const catalog = await readSnapshot(owner, 'catalog');
+        if (catalog.basis !== basis) throw Error('snapshot-basis-mismatch');
+        for (const { path, directory = false } of catalog.rows) {
+          entries.push({ path, directory, sourceDevice: deviceId });
+        }
+      }
+      return entries;
+    } finally {
+      for (const { owner } of admitted) owner.secret.fill(0);
+    }
+  }
+
   return {
     restoreCopy,
+    publicRecipient: session => compute('public-recipient', session, {}, []),
+    async grant(session, recipient) {
+      const verified = await compute('validate-recipient', session, { recipient }, []);
+      return invoke('vaultWnfsRecipientSet', { id: verified.id, recipient: verified });
+    },
+    revoke: id => invoke('vaultWnfsRecipientSet', { id }),
+    async restoreShared(session, grant) {
+      const recipient = await compute('public-recipient', session, {}, []);
+      if (grant?.schema !== 'awai.drive.wnfs.grant.v1' || grant.recipient !== recipient.id ||
+          typeof grant.basis !== 'string' || !grant.basis) throw Error('invalid-snapshot-grant');
+      const snapshot = await readSnapshot({ ...session, wnfs: grant.head }, 'open-share', 'txt');
+      const { rows, entries, ...verified } = snapshot;
+      if (verified.basis !== grant.basis) {
+        for (const { chunks = [] } of rows) for (const chunk of chunks) chunk.fill(0);
+        throw Error('snapshot-basis-mismatch');
+      }
+      const published = await restoreCopy(rows, false, { share: grant.head.capsule, entries });
+      return { ...published, ...verified };
+    },
     async sync(session) {
       const { entries } = await invoke('vaultWnfsInventory');
+      const { revision, items } = await invoke('vaultWnfsRecipients');
       if (!entries.length) throw Error('empty-sync-snapshot');
       const rows = [];
       try {
@@ -116,17 +174,23 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
           if (await sha256(bytes) !== entry.sha256) throw Error('source-size-changed');
         }
         const sealStart = performance.now();
-        const sealed = await compute('seal', session, { rows },
+        const sealed = await compute('seal', session, { rows, recipients: Object.values(items) },
           rows.flatMap(row => row.bytes ? [row.bytes.buffer] : []));
         const publishStart = performance.now();
         const packBytes = sealed.packs.reduce((n, pack) => n + pack.length, sealed.capsule.bytes.length);
         const dataIds = [];
         for (const pack of sealed.packs) dataIds.push(await packs.publish(pack, verifyReceipt));
         const capsule = await packs.publish(sealed.capsule.bytes, verifyReceipt);
+        const grants = [];
+        for (const { recipient, capsule: wrapped } of sealed.grants ?? []) {
+          const id = await packs.publish(wrapped.bytes, verifyReceipt);
+          grants.push({ schema: 'awai.drive.wnfs.grant.v1', recipient, basis: sealed.basis,
+            head: { schema: 'awai.drive.wnfs.v1', origin, root: wrapped.root, capsule: id, packs: dataIds } });
+        }
         const publishedAt = performance.now();
-        await invoke('vaultWnfsCommit', { root: sealed.capsule.root, capsule, packs: dataIds, origin, entries });
+        await invoke('vaultWnfsCommit', { root: sealed.capsule.root, capsule, packs: dataIds, origin, entries, recipientRevision: revision });
         return { files: rows.filter(row => !row.directory).length, basis: sealed.basis,
-          bytes: packBytes, dataPacks: dataIds.length, sealMs: publishStart - sealStart, publishMs: publishedAt - publishStart };
+          bytes: packBytes, grants, dataPacks: dataIds.length, sealMs: publishStart - sealStart, publishMs: publishedAt - publishStart };
       } finally {
         for (const row of rows) if (row.bytes?.byteLength) row.bytes.fill(0);
       }
@@ -137,41 +201,23 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
       return rows;
     },
 
-    // The owner host supplies these grants after authenticating the account,
-    // confirming device authorization and binding the stored heads to it.
-    async catalogAuthorizedAccount({ subject, sources }) {
-      if (typeof subject !== 'string' || !SUBJECT.test(subject) || !Array.isArray(sources) ||
-          sources.length > MAX_ACCOUNT_SOURCES) throw Error('invalid-account-snapshot-grant');
-      const deviceIds = new Set();
-      for (const source of sources) {
-        if (source?.subject !== subject || typeof source.deviceId !== 'string' || !DEVICE_ID.test(source.deviceId) ||
-            deviceIds.has(source.deviceId) || typeof source.basis !== 'string' || !BASIS_ID.test(source.basis) ||
-            typeof source.owner?.record !== 'string' || !source.owner.record || source.owner.record.length > 16000 ||
-            !(source.owner.secret instanceof Uint8Array) || source.owner.secret.length !== 32) {
-          throw Error('invalid-account-snapshot-grant');
-        }
-        validateHead(source.owner.wnfs);
-        deviceIds.add(source.deviceId);
+    catalogAuthorizedAccount,
+    async catalogAccountRecipients(session, {subject, sources}) {
+      if (!Array.isArray(sources) || sources.length > MAX_ACCOUNT_SOURCES) {
+        throw Error('invalid-account-snapshot-grant');
       }
-      const entries = [];
-      const admitted = sources.map(({ owner, deviceId, basis }) => ({
-        deviceId, basis,
-        owner: { record: owner.record, secret: owner.secret.slice(),
-          wnfs: { ...owner.wnfs, packs: [...owner.wnfs.packs] } }
-      }));
-      try {
-        for (const { owner, deviceId, basis } of admitted) {
-          const catalog = await readSnapshot(owner, 'catalog');
-          if (catalog.basis !== basis) throw Error('snapshot-basis-mismatch');
-          for (const { path, directory = false } of catalog.rows) {
-            entries.push({ path, directory, sourceDevice: deviceId });
-          }
+      const recipient = await compute('public-recipient', session, {}, []);
+      const admitted = sources.map(source => {
+        const grant = source?.grant;
+        if (grant?.schema !== 'awai.drive.wnfs.grant.v1' || grant.recipient !== recipient.id) {
+          throw Error('invalid-snapshot-grant');
         }
-        return entries;
-      } finally {
-        for (const { owner } of admitted) owner.secret.fill(0);
-      }
+        return {subject: source.subject, deviceId: source.deviceId, basis: grant.basis,
+          owner: {record: session.record, secret: session.secret, wnfs: grant.head}};
+      });
+      return catalogAuthorizedAccount({subject, sources: admitted});
     },
+
     async restore(session) {
       const snapshot = await readSnapshot(session, 'open', 'txt');
       // The production worker returns basis and query results with the

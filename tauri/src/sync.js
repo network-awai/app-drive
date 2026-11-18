@@ -1,8 +1,9 @@
 import { createDrivePackClient } from './drive-packs.mjs';
 import './core.js';
+import {createDriveAccountLink} from './account-link.js';
 import { createWnfsSync } from './wnfs-sync.js';
 import{createClientConsentHost,createClientOperationBroker}from'./runtime.js';
-import{runtimeFor}from'./sync-contract.js';import{syncOrigin,receiptKeys,wnfsEnabled}from'./sync-config.js';import{verifyDrivePackReceipt}from'./receipt.js';
+import{runtimeFor}from'./sync-contract.js';import{syncOrigin,receiptKeys,wnfsEnabled,accountLinkEnabled}from'./sync-config.js';import{verifyDrivePackReceipt}from'./receipt.js';
 const core=window.AwaiDriveEncrypted;
 const b64=b=>{let s='';for(let i=0;i<b.length;i+=16384)s+=String.fromCharCode(...b.subarray(i,i+16384));return btoa(s);};
 const unb64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
@@ -22,6 +23,7 @@ function verifyReceipt(receipt, expected) {
 }
 const wnfs = createWnfsSync({ invoke, origin: syncOrigin, packs, verifyReceipt, sha256: core.sha256 });
 export const configured=Boolean(syncOrigin);
+export const sharingEnabled=Boolean(syncOrigin && wnfsEnabled);
 
 export async function cloudCatalog() {
   if (!configured) throw Error('cloud-snapshot-unavailable');
@@ -64,7 +66,32 @@ export async function inspectAuthorizedSnapshot(owner, expectedBasis, extension)
  return wnfs.inspect(owner,expectedBasis,extension);
 }
 
+async function sharing(action) {
+ if(!wnfsEnabled)throw Error('recovery-required');
+ const owner = await session(true);
+ try {return await action(owner);} finally {owner.secret.fill(0);}
+}
+export const publicSnapshotRecipient = () => sharing(owner => wnfs.publicRecipient(owner));
+export const grantSnapshotRecipient = recipient => sharing(owner => wnfs.grant(owner, recipient));
+export const revokeSnapshotRecipient = id => sharing(() => wnfs.revoke(id));
+export const restoreSharedSnapshot = grant => sharing(owner => wnfs.restoreShared(owner, grant));
 export async function catalogAuthorizedAccount(grant) {
   if (!configured || !wnfsEnabled) throw Error('recovery-required');
   return wnfs.catalogAuthorizedAccount(grant);
+}
+
+
+// Only a trusted account-head provider may hand this method a verified list.
+export async function catalogVerifiedRecipientHeads(headList) {
+  if (!configured || !wnfsEnabled || !accountLinkEnabled) throw Error('recovery-required');
+  const account = await createDriveAccountLink({call: invoke}).linkedAccount();
+  if (!account || account.accountDid !== headList?.subject) throw Error('invalid-account-snapshot-grant');
+  const saved = await invoke('vaultSession', {initialize: false});
+  if (!saved.initialized || !saved.record) throw Error('recovery-required');
+  const secret = unb64(saved.secret);
+  try {
+    return await wnfs.catalogAccountRecipients({record: saved.record, secret}, headList);
+  } finally {
+    secret.fill(0);
+  }
 }

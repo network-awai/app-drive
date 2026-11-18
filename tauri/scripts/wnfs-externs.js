@@ -44,3 +44,6 @@ Object.prototype.temporalKey;
 Object.prototype.version;
 Object.prototype.basis;
 Object.prototype.rows;
+Object.prototype.pq;
+Object.prototype.pub;
+Object.prototype.grants;
