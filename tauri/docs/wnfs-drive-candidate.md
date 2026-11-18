@@ -50,3 +50,38 @@ Apple silicon Mac, Node v26.0.0, 262,124 plaintext bytes across three files,
 median outer CAR 285,239 bytes. Host CLI timing excludes browser consent and
 native final publication. It qualifies the shared core and service, including
 real signed receipts. No device comparison is implied by this table.
+
+## Same-snapshot verification between Android apps
+
+On the isolated ARM64 Android 35 emulator AWAI3390, Drive published a
+283,922-byte encrypted CAR to the real Yataverse endpoint from three
+synthetic files (262,124 plaintext bytes). Drive accepted the signed
+receipt, did an independently approved GET, and verified readback before
+accepting the root. The Drive cache was evicted and verified empty.
+After process restart, a newly approved GET restored all three files
+with exact expected SHA-256 values.
+
+The Itonami Yataverse dapp was freshly installed with zero local files.
+The harness supplied the synthetic owner's session to the read-only
+dapp host in memory. Denial was verified with zero HTTP GETs. An
+independently approved GET in the dapp returned the exact same WNFS
+forest CID, all three SHA-256 values, and both extension-query rows.
+The dapp independently qualified native cache eviction/restart/restore
+with its own synthetic one-file snapshot and fresh custody.
+
+| Stage | Drive, ms | Itonami dapp, ms |
+|---|---:|---:|
+| Seal and wrap | 795.4 | — |
+| PUT, signed receipt, verified GET | 5,893.9 | — |
+| Empty-cache verified GET | 2,317.2 | 1,787.4 |
+| Decrypt, verify WNFS and recover file bytes | 988.4 | 935.9 |
+| Rebuild local Datalog projection | 0.8 | 0.6 |
+| Query for txt files | 4.2 | 3.2 |
+| Publish files to the native cache | 166.7 | — |
+
+One trial per app for the same snapshot. Network times include dialog
+interaction and are end-to-end app timings. The same-snapshot dapp
+inspection restored bytes in memory. Session provisioning was synthetic
+and in-memory. A product owner invitation, production principal
+onboarding, physical Awai OS measurement and release are outside this
+qualification. See the [dapp candidate](https://github.com/network-awai/app-itonami-yataverse/pull/32).
