@@ -58,7 +58,17 @@
     (into {} (remove (comp nil? val)) values)))
 
 (def ^:private query-term
-  #"\G(?:'([A-Za-z0-9_-]+)'\s+in\s+parents|(trashed|starred)\s*=\s*(true|false)|name\s+contains\s+'((?:[^'\\]++|\\['\\])++)')(?:\s+and\s+(?=\S)|$)")
+  #"\G(?:'([A-Za-z0-9_-]+)'\s+in\s+parents|(trashed|starred)\s*=\s*(true|false)|(name|mimeType)\b\s*(contains|!=|=)\s*'((?:[^'\\]++|\\['\\])++)')(?:\s+and\s+(?=\S)|$)")
+
+(defn- text-filter [field operator literal]
+  (let [value (str/replace literal #"\\(['\\])" second)
+        matches (case operator
+                  "contains" (if (= field "name")
+                               #(str/starts-with? % value)
+                               #(str/includes? % value))
+                  "=" #(= % value)
+                  "!=" #(not= % value))]
+    (fn [file] (matches (get file field "")))))
 
 (defn- query-filter [value]
   (if (nil? value)
@@ -67,12 +77,11 @@
           terms (re-seq query-term query)]
       (when-not (and (seq terms) (= (count query) (reduce + (map (comp count first) terms))))
         (invalid "Unsupported Drive query term"))
-      (let [filters (mapv (fn [[_ id field bool quoted-name]]
+      (let [filters (mapv (fn [[_ id field bool text-field operator literal]]
                             (cond
                               id (fn [file] (some #{id} (get file "parents")))
                               field (fn [file] (= (= bool "true") (get file field)))
-                              :else (let [name (str/replace quoted-name #"\\(['\\])" second)]
-                                      (fn [file] (str/starts-with? (get file "name" "") name)))))
+                              :else (text-filter text-field operator literal)))
                           terms)]
         (fn [file] (every? #(% file) filters))))))
 
