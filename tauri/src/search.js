@@ -8,13 +8,20 @@ const extensions = {
   document: new Set('csv doc docx md odp ods odt pdf ppt pptx rtf txt xls xlsx'.split(' ')),
 };
 
+export function fileKind(item) {
+  if (item.directory) return 'folder';
+  const name = searchKey(item.name);
+  const dot = name.lastIndexOf('.');
+  if (dot < 1) return null;
+  const suffix = name.slice(dot + 1);
+  return Object.keys(extensions).find(kind => extensions[kind].has(suffix)) ?? null;
+}
+
 function matches(needle, kind, item) {
   const name = searchKey(item.name);
   if (!name.includes(needle)) return false;
   if (kind === 'all') return true;
-  if (item.directory) return kind === 'folder';
-  const dot = name.lastIndexOf('.');
-  return dot > 0 && Boolean(extensions[kind]?.has(name.slice(dot + 1)));
+  return fileKind(item) === kind;
 }
 
 // Walk only the native app-private tree. The adapter validates every folder path.

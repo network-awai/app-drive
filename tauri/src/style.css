@@ -91,3 +91,153 @@ main details { margin-block-start: 1rem; color: var(--awai-muted); }
 .drive-account h2 { font-size: 1.125rem; margin: 0; }
 #account-request { margin-block-start: .75rem; }
 #account-request input { margin-block: .375rem .5rem; }
+
+/* Awai Android v2 · Figma search screens */
+.drive-shell { max-inline-size: 75rem; margin-inline: auto; }
+.drive-shell main { min-inline-size: 0; padding-block-end: max(6rem, env(safe-area-inset-bottom)); }
+.drive-shell main header { align-items: center; }
+.drive-shell main header #storage { order: 3; flex-basis: max-content; margin: .3rem 0 0; }
+.drive-settings {
+  display: grid;
+  place-items: center;
+  margin-inline-start: auto;
+  inline-size: 48px;
+  block-size: 48px;
+  border-radius: 50%;
+}
+.drive-nav {
+  position: fixed;
+  z-index: 1;
+  inset: auto 0 0;
+  justify-content: space-around;
+  background: var(--awai-background);
+  border-block-start: 1px solid var(--awai-border);
+  padding: .25rem max(1rem, env(safe-area-inset-right)) max(.25rem, env(safe-area-inset-bottom));
+  margin: 0;
+}
+.drive-nav a {
+  color: var(--awai-text);
+  text-align: center;
+  text-decoration: none;
+  font-size: .75rem;
+  min-inline-size: 60px;
+  min-block-size: 52px;
+  padding: .35rem .5rem;
+  border-radius: 1rem;
+}
+.drive-nav img { display: block; margin: auto; }
+.drive-nav a:focus-visible, .drive-settings:focus-visible { outline: 3px solid var(--awai-primary); }
+.visually-hidden, .filter-chip input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.drive-search-controls { align-items: center; grid-template-columns: minmax(0,1fr) auto auto; }
+.search-input { position: relative; min-inline-size: 0; }
+.search-input img { position: absolute; inset: 50% auto auto .85rem; translate: 0 -50%; pointer-events: none; }
+.search-input .search-prompt {
+  position: absolute;
+  inset: 50% auto auto 3rem;
+  translate: 0 -50%;
+  pointer-events: none;
+  color: var(--awai-muted);
+  font-weight: 400;
+}
+.search-input:has(input:not(:placeholder-shown)) .search-prompt { clip-path: inset(50%); }
+.search-input input { border: 0; border-radius: 99rem; min-block-size: 56px; padding-inline: 3rem .8rem; }
+.drive-filters { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; min-inline-size: 0; padding: 0; margin: 0; border: none; }
+.drive-filters[hidden] { display: none; }
+.filter-chip { position: relative; display: inline-grid; }
+.filter-chip span {
+  display: grid;
+  place-items: center;
+  padding-inline: .75rem;
+  min-inline-size: 5.25rem;
+  min-block-size: 44px;
+  color: var(--awai-muted);
+  background: var(--awai-surface);
+  border-radius: 99rem;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: .875rem;
+}
+.filter-chip input:checked + span { color: var(--awai-on-container, var(--awai-text)); background: var(--awai-container); }
+.filter-chip input:focus-visible + span { outline: 3px solid var(--awai-primary); outline-offset: 2px; }
+.filter-chip input:disabled + span { opacity: .55; cursor: wait; }
+#search-kind-extra { font: inherit; color: var(--awai-text); background: var(--awai-surface); border: 1px solid var(--awai-border); padding: .65rem; border-radius: .75rem; }
+.search-notice {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  min-block-size: 62px;
+  border-radius: .875rem;
+  padding: .6rem .75rem;
+  margin-block: .8rem;
+  background: var(--awai-container);
+  color: var(--awai-text);
+  font-size: .875rem;
+}
+.search-notice[hidden], #search-recovery[hidden], #clear-kind[hidden] { display: none; }
+.search-notice.unavailable { background: var(--awai-error-container, var(--awai-surface)); }
+.search-notice p { margin: .15rem 0 0; color: var(--awai-muted); font-size: .8125rem; }
+.search-notice p:empty { display: none; }
+.drive-shell #files { padding: 0; border: none; background: none; }
+.drive-shell #files:empty { min-block-size: 0; }
+.drive-shell #files .cloud-entry, .drive-shell #files button.awai-button {
+  position: relative;
+  display: grid;
+  min-block-size: 72px;
+  padding: .65rem .8rem;
+  border-radius: .875rem;
+  background: var(--awai-surface);
+}
+.drive-shell #files [data-kind="image"], .drive-shell #files [data-kind="video"] { padding-inline-start: 4rem; }
+.drive-shell #files [data-kind="image"]::before, .drive-shell #files [data-kind="video"]::before {
+  content: "";
+  position: absolute;
+  inset: 50% auto auto .75rem;
+  translate: 0 -50%;
+  inline-size: 40px;
+  block-size: 40px;
+  background: var(--awai-container) center / auto no-repeat url("icons/camera.svg");
+  border-radius: .75rem;
+}
+.drive-shell #files [data-kind="video"]::before { background-image: url("icons/video.svg"); }
+.drive-shell #files button:has(span)::after {
+  content: "";
+  position: absolute;
+  inset: 50% .5rem auto auto;
+  translate: 0 -50%;
+  inline-size: 24px;
+  block-size: 24px;
+  background: center no-repeat url("icons/chevron.svg");
+}
+.drive-shell #files button { padding-inline-end: 2.25rem; }
+.drive-shell #files span { font-weight: 700; }
+#device-panel { scroll-margin-block-start: 1rem; }
+.drive-account { padding: 1rem; border-radius: 1rem; background: var(--awai-surface); }
+.account-lock { margin-block-end: .5rem; }
+.account-intro { color: var(--awai-muted); margin-block: .4rem; }
+@media (max-width: 34rem) {
+  .drive-search-controls { grid-template-columns: 1fr auto; }
+  .drive-search-controls .search-input { grid-column: 1 / -1; }
+  .drive-search-controls button { min-block-size: 44px; }
+}
+@media (min-width: 52rem) {
+  .drive-shell { display: grid; grid-template-columns: minmax(11rem, 14.5rem) minmax(0, 1fr); gap: 1.5rem; padding: 1.5rem; }
+  .drive-shell main { padding: .75rem 1rem 2rem; inline-size: 100%; }
+  .drive-nav { position: sticky; inset: 1.5rem auto auto; align-self: start; flex-direction: column; padding: 1rem; border: 0; border-radius: 1.25rem; background: var(--awai-surface); }
+  .drive-nav a { display: flex; align-items: center; justify-content: flex-start; gap: .55rem; inline-size: 100%; font-size: .875rem; }
+  .drive-nav img { margin: 0; }
+}
+@media (prefers-color-scheme: dark) {
+  .drive-nav img, .drive-settings img, .search-input img, .search-notice img, .account-lock { filter: invert(1); }
+  .drive-shell #files button::after { filter: invert(1); }
+}
+.drive-nav a[aria-current] { color: var(--awai-primary); background: var(--awai-container); }
+.drive-shell #files .awai-button[data-kind="image"],
+.drive-shell #files .awai-button[data-kind="video"] { padding-inline-start: 4rem; }
