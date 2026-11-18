@@ -37,6 +37,32 @@
     (is (= 400 (:status (get-metadata st endpoint {"fields" "files(owners)"}))))
     (is (= 400 (:status (get-metadata st (str endpoint "/" file-id) {"alt" "media"}))))))
 
+(deftest drive-v3-quoted-prefix-and-pagination
+  (let [st (store/fake-store)
+        prefix "Rock and Roll's\\Live"
+        _ (doseq [name [(str prefix " 01.jpg") (str prefix " 02.jpg") (str "Copy of " prefix)]]
+            (handlers/files-create st {"name" name}))
+        request {:request-method :get :uri endpoint :headers {"x-api-key" "fixture"}}
+        handler (server/->ring-handler st "fixture")
+        response (handler (assoc request :query-string
+                                 "q=name+contains+%27Rock+and+Roll%5C%27s%5C%5CLive%27+and+trashed%3Dfalse&fields=nextPageToken%2Cfiles%28name%29&pageSize=1"))
+        page (json/parse-string (:body response))
+        token (get page "nextPageToken")
+        next-page (:json (get-metadata st endpoint
+                          {"q" "name contains 'Rock and Roll\\'s\\\\Live' and trashed=false"
+                           "fields" "nextPageToken,files(name)" "pageSize" "1" "pageToken" token}))]
+    (is (= 200 (:status response)))
+    (is (= [{"name" (str prefix " 01.jpg")}] (get page "files")))
+    (is (string? token))
+    (is (= {"files" [{"name" (str prefix " 02.jpg")}]} next-page))
+    (doseq [query ["name contains 'unfinished"
+                   "name contains 'bad\\n'"
+                   "name contains 'x' and "
+                   "name contains 'x' or trashed=false"
+                   "name contains 'x' and invalid=false"
+                   ""]]
+      (is (= 400 (:status (get-metadata st endpoint {"q" query}))) query))))
+
 (deftest drive-v3-host-boundary
   (let [st (store/fake-store)
         request {:request-method :get :uri endpoint :query-string "fields=files%28id%29"}

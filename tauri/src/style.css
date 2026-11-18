@@ -16,8 +16,27 @@ main {
 main header { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem 1rem; margin-block-end: 1rem; }
 .awai-ui main h1 { margin: 0; font-size: clamp(1.55rem, 3vw, 2rem); font-weight: 700; }
 main header #storage { padding: .45rem .8rem; background: var(--awai-container); color: var(--awai-primary); border-radius: 99rem; }
+.drive-search { margin-block-end: 1rem; }
+.drive-search form { gap: .5rem; }
+.drive-search label { font-weight: 600; }
+.drive-search-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: .5rem; }
+.drive-search-controls input {
+  min-inline-size: 0;
+  padding-inline: .9rem;
+  border: 1px solid var(--awai-muted);
+  border-radius: .75rem;
+  color: var(--awai-text);
+  background: var(--awai-surface);
+}
+.drive-search-controls input::-webkit-search-cancel-button { appearance: none; }
+#search-heading { margin-block: 1rem .6rem; font-size: 1.125rem; overflow-wrap: anywhere; }
+@media (max-width: 22rem) {
+  .drive-search-controls { grid-template-columns: auto auto minmax(0, 1fr); }
+  .drive-search-controls input { grid-column: 1 / -1; }
+}
+main nav[hidden], main .actions[hidden] { display: none; }
 main #status { color: var(--awai-muted); margin-block: .75rem; overflow-wrap: anywhere; }
-main #status:empty { display: none; }
+main #status:empty { min-block-size: 0; margin: 0; }
 main nav { margin-block: 1rem .6rem; flex-wrap: wrap; font-weight: 600; }
 main #files {
   margin-block: 0 1rem;
@@ -40,6 +59,7 @@ main #files button.awai-button {
   color: var(--awai-text);
   text-align: start;
 }
+main #files span, main #files small { overflow-wrap: anywhere; min-inline-size: 0; }
 main #files small { color: var(--awai-muted); margin: 0; }
 main .actions { gap: .5rem; flex-direction: row; align-items: center; }
 main details { margin-block-start: 1rem; color: var(--awai-muted); }
