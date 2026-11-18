@@ -22,6 +22,7 @@ function verifyReceipt(receipt, expected) {
 }
 const wnfs = createWnfsSync({ invoke, origin: syncOrigin, packs, verifyReceipt, sha256: core.sha256 });
 export const configured=Boolean(syncOrigin);
+export const sharingEnabled=Boolean(syncOrigin && wnfsEnabled);
 
 export async function cloudCatalog() {
   if (!configured) throw Error('cloud-snapshot-unavailable');
@@ -63,3 +64,13 @@ export async function inspectAuthorizedSnapshot(owner, expectedBasis, extension)
  if(!wnfsEnabled)throw Error('recovery-required');
  return wnfs.inspect(owner,expectedBasis,extension);
 }
+
+async function sharing(action) {
+ if(!wnfsEnabled)throw Error('recovery-required');
+ const owner = await session(true);
+ try {return await action(owner);} finally {owner.secret.fill(0);}
+}
+export const publicSnapshotRecipient = () => sharing(owner => wnfs.publicRecipient(owner));
+export const grantSnapshotRecipient = recipient => sharing(owner => wnfs.grant(owner, recipient));
+export const revokeSnapshotRecipient = id => sharing(() => wnfs.revoke(id));
+export const restoreSharedSnapshot = grant => sharing(owner => wnfs.restoreShared(owner, grant));

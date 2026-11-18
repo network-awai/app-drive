@@ -137,9 +137,8 @@
               (recur end (or found-root root?)))))))
     out))
 
-(defn- capsule-pack [record secret forest access]
-  (let [record (edn/read-string record)
-        objects (atom {})
+(defn- recipient-capsule [recipient forest access]
+  (let [objects (atom {})
         plaintext (blocks/u8
                    (blocks/encode
                     #js {:schema capsule-schema :forest forest
@@ -147,10 +146,7 @@
                                       #js {:label (blocks/u8 (:label access))
                                            :temporalKey (blocks/u8 (:temporal-key access))
                                            :contentCid (:content-cid access)}}}))]
-    (-> (keys/open-record record secret)
-        (.then (fn [owner]
-                 (-> (encrypted/object! objects (assoc owner :pq-pub (:pq-pub record)) plaintext)
-                     (.finally #(encrypted/wipe! owner)))))
+    (-> (encrypted/object! objects recipient plaintext)
         (.then (fn [root]
                  (let [cid #(car/cid-bytes car/codec-raw (encrypted/unhex %))]
                    #js {:root root
@@ -160,6 +156,27 @@
                                   :blocks (mapv (fn [[id bytes]] {:cid (cid id) :bytes (vec bytes)})
                                                 (sort-by key @objects))}))})))
         (.finally #(.fill plaintext 0)))))
+
+
+(defn- admit-recipient [candidate]
+  (when-not (and candidate
+                 (= #{"id" "pub" "pq"} (set (js/Object.keys candidate)))
+                 (string? (.-id candidate)) (re-matches #"kv1:[A-Za-z0-9_-]{43}" (.-id candidate))
+                 (string? (.-pub candidate)) (re-matches #"[A-Za-z0-9_-]{43}" (.-pub candidate))
+                 (string? (.-pq candidate)) (re-matches #"[A-Za-z0-9_-]{1579}" (.-pq candidate)))
+    (refuse))
+  (let [identity {:recipient-key (.-id candidate) :pub (.-pub candidate) :pq-pub (.-pq candidate)}]
+    (-> (keys/fingerprint identity)
+        (.then (fn [actual]
+                 (when-not (= actual (:recipient-key identity)) (refuse))
+                 identity)))))
+
+(defn validate-recipient [candidate]
+  (-> (admit-recipient candidate) (.then (fn [_] candidate))))
+
+(defn public-recipient [record]
+  (let [record (edn/read-string record)]
+    (validate-recipient #js {:id (:recipient-key record) :pub (:pub record) :pq (:pq-pub record)})))
 
 (defn- open-capsule [record secret root pack]
   (when (> (.-length pack) 262144) (refuse))
@@ -196,14 +213,54 @@
                                          :contentCid (.-bytes (node/raw-link (.-contentCid ref)))}})})
                    (finally (.fill plain 0))))))))
 
-(defn seal [record secret rows]
-  (let [store (store)
-        sealed (tree/seal-tree store {:modulus (accumulator/integer-bytes modulus 256)
-                                       :generator (random-generator)}
-                               (tree-sources rows) (js/Math.floor (/ (js/Date.now) 1000)))]
-    (-> (capsule-pack record secret (:forest sealed) (:access sealed))
-        (.then (fn [capsule]
-                 #js {:capsule capsule :packs (make-packs store (:forest sealed)) :basis (.toString (:forest sealed))})))))
+(defn seal
+  ([record secret rows] (seal record secret rows #js []))
+  ([record secret rows recipients]
+   (when-not (and (array? recipients) (<= (.-length recipients) 8)) (refuse))
+   (let [record (edn/read-string record)]
+     (-> (js/Promise.all (into-array (map admit-recipient (array-seq recipients))))
+         (.then
+          (fn [admitted]
+            (let [ids (mapv :recipient-key (array-seq admitted))]
+              (when (or (some #{(:recipient-key record)} ids)
+                        (not= (count ids) (count (set ids))))
+                (refuse)))
+            (keys/open-record record secret)))
+         (.then
+          (fn [owner]
+            (let [store (store)
+                  sealed (tree/seal-tree store {:modulus (accumulator/integer-bytes modulus 256)
+                                                 :generator (random-generator)}
+                                         (tree-sources rows) (js/Math.floor (/ (js/Date.now) 1000)))
+                  {:keys [forest access]} sealed
+                  grants (array)]
+              (-> (recipient-capsule (assoc owner :pq-pub (:pq-pub record)) forest access)
+                  (.then
+                   (fn [capsule]
+                     (-> (encrypted/sequence!
+                          (array-seq recipients)
+                          (fn [entry]
+                            (-> (admit-recipient entry)
+                                (.then #(recipient-capsule % forest access))
+                                (.then (fn [recipient-pack]
+                                         (.push grants #js {:recipient (.-id entry) :capsule recipient-pack}))))))
+                         (.then (fn [_]
+                                  #js {:capsule capsule :packs (make-packs store forest)
+                                       :basis (.toString forest) :grants grants})))))
+                  (.finally #(encrypted/wipe! owner))))))))))
+
+(defn inventory [rows]
+  (into-array
+   (map (fn [row]
+          (if (.-directory row)
+            #js {:path (.-path row) :directory true}
+            (let [digest (.create sha/sha256)
+                  chunks (array-seq (.-chunks row))]
+              (doseq [chunk chunks] (.update digest chunk))
+              #js {:path (.-path row) :directory false
+                   :size (reduce + (map #(.-length %) chunks))
+                   :sha256 (encrypted/hex (.digest digest))})))
+        (array-seq rows))))
 
 (defn- read-snapshot [record secret root capsule packs metadata-only?]
   (-> (open-capsule record secret root capsule)
