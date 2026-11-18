@@ -69,5 +69,18 @@
       "awai/wnfs/ratchet.cljc": "76deaa7415c8fd58ce3417804fcff6df2511f82d85cefa9c2328838c3955dcbe",
       "awai/wnfs/wire.cljc": "c929ad47882986f8ea362fefa145153a3bbb0d2d2075639a0832a437d581efb2"
     }
+  },
+  "query": {
+    "repository": "https://github.com/kotoba-lang/kotoba",
+    "revision": "1c9564cb79ca5d2f1e0f39b3d5c7bdf1a7ed1f9b",
+    "files": {
+      "datalog/core.cljk": "8edee6288688d139a63c8b37ed3c79c7b77022a223eba540c43013e9ff42aefa",
+      "datalog/index.cljk": "2e3de7d5a2a1aeab588c7051dd4facdae94e399784637897f174ec3f292e0407",
+      "datalog/query.cljk": "31a3a5697b6931a32372c1619c996a0ab8ec91b7a0ff8517d5f97b7f477d83ad",
+      "datalog/singleton.cljk": "ad398e11e33ec8a316c827cec528bec9695c3a9a0619c2f52ab6f4e71636697f",
+      "datom/source.cljk": "88c2f88200b719cd8c6f575e307ad96b897e4ae0f37d427167febb8b8f76d2be",
+      "kotoba/lang/coll.cljk": "6880ecaf27a40f6385a5861d6b04ea31456c69d745964a97f513acfded86041e",
+      "kotoba/lang/text.cljk": "4f62e846a620ec49f5c84a69f6788b97cff4e53d4248beb02b4b41434d58a55b"
+    }
   }
 }

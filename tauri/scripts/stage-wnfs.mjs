@@ -29,3 +29,13 @@ for (const [path, sha256] of Object.entries(pins.wnfs.files)) {
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, source);
 }
+
+for (const [path, expected] of Object.entries(pins.query.files)) {
+  const source = await readFile(new URL('query/' + path, root));
+  if (createHash('sha256').update(source).digest('hex') !== expected) {
+    throw new Error('Kotoba Datalog pin drift: ' + path);
+  }
+  const file = fileURLToPath(new URL('.build/wnfs/' + path.replace(/\.cljk$/, '.cljc'), root));
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, source);
+}
