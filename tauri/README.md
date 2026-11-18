@@ -54,6 +54,9 @@ or folders. The app uses filename extensions for file categories. The separate
 Drive v3 metadata service uses stored MIME types for `mimeType contains`,
 `mimeType =` and `mimeType !=` predicates in `files.list` queries.
 
+The [cross-device catalog](docs/cross-device-search.md) reads multiple WNFS
+snapshots when a trusted Awai account host supplies their authorized heads.
+
 ## Safety and integration
 
 - Upload completion requires an explicit receipt plus separately approved full

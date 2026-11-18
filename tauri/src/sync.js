@@ -63,3 +63,8 @@ export async function inspectAuthorizedSnapshot(owner, expectedBasis, extension)
  if(!wnfsEnabled)throw Error('recovery-required');
  return wnfs.inspect(owner,expectedBasis,extension);
 }
+
+export async function catalogAuthorizedAccount(grant) {
+  if (!configured || !wnfsEnabled) throw Error('recovery-required');
+  return wnfs.catalogAuthorizedAccount(grant);
+}

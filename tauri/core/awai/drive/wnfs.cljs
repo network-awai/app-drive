@@ -241,8 +241,7 @@
   (read-snapshot record secret root capsule packs false))
 
 (defn catalog [record secret root capsule packs]
-  (-> (read-snapshot record secret root capsule packs true)
-      (.then (fn [snapshot] (.-rows snapshot)))))
+  (read-snapshot record secret root capsule packs true))
 
 (defn open [record secret root capsule packs]
   (-> (open-snapshot record secret root capsule packs)
