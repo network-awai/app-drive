@@ -114,5 +114,19 @@
     "revision": "1c9564cb79ca5d2f1e0f39b3d5c7bdf1a7ed1f9b",
     "path": "lib/kotoba.wasmWebcomponent/src/kotoba-client-runtime.js",
     "sha256": "de5e684e2c10430e8317dcbb60784fa65db30c8da8832b79665c15f7d3fefac6"
+  },
+  "yataverse": {
+    "repository": "https://github.com/network-awai/app-itonami-yataverse",
+    "revision": "4de1d5822ad506c15612ca7aaed10a6d433a8e89",
+    "files": {
+      "drive-packs.mjs": {
+        "path": "src/drive-packs.mjs",
+        "sha256": "c5b8d8892d776c944f322751c88a2c01917c81e1f18a8a4f86555284196f5d01"
+      },
+      "bounded-response.mjs": {
+        "path": "src/bounded-response.mjs",
+        "sha256": "ea0937fa99f8d8efe0f6ca1c047c876126df78ea04b03c28cfc03d68cdfa733b"
+      }
+    }
   }
 }
