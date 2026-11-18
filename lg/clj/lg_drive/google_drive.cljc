@@ -57,17 +57,24 @@
                 "version" (some-> (get file "version") str)}]
     (into {} (remove (comp nil? val)) values)))
 
+(def ^:private query-term
+  #"\G(?:'([A-Za-z0-9_-]+)'\s+in\s+parents|(trashed|starred)\s*=\s*(true|false)|name\s+contains\s+'((?:[^'\\]++|\\['\\])++)')(?:\s+and\s+(?=\S)|$)")
+
 (defn- query-filter [value]
-  (let [term (fn [s]
-               (or (when-let [[_ id] (re-matches #"'([A-Za-z0-9_-]+)'\s+in\s+parents" s)]
-                     (fn [file] (some #{id} (get file "parents"))))
-                   (when-let [[_ field value] (re-matches #"(trashed|starred)\s*=\s*(true|false)" s)]
-                     (fn [file] (= (= value "true") (get file field))))
-                   (when-let [[_ name] (re-matches #"name\s+contains\s+'([^'\\]+)'" s)]
-                     (fn [file] (str/starts-with? (get file "name" "") name)))
-                   (invalid "Unsupported Drive query term")))
-        filters (if (nil? value) [] (mapv term (str/split (str/trim value) #"\s+and\s+" -1)))]
-    (fn [file] (every? #(% file) filters))))
+  (if (nil? value)
+    (constantly true)
+    (let [query (str/trim value)
+          terms (re-seq query-term query)]
+      (when-not (and (seq terms) (= (count query) (reduce + (map (comp count first) terms))))
+        (invalid "Unsupported Drive query term"))
+      (let [filters (mapv (fn [[_ id field bool quoted-name]]
+                            (cond
+                              id (fn [file] (some #{id} (get file "parents")))
+                              field (fn [file] (= (= bool "true") (get file field)))
+                              :else (let [name (str/replace quoted-name #"\\(['\\])" second)]
+                                      (fn [file] (str/starts-with? (get file "name" "") name)))))
+                          terms)]
+        (fn [file] (every? #(% file) filters))))))
 
 (defn- sort-files [files value]
   (let [[_ field direction] (re-matches #"(name|modifiedTime)(?:\s+(asc|desc))?" (or value "name"))

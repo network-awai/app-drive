@@ -3,6 +3,7 @@ bind_native(document.documentElement,{tonal:'.tonal,.secondary',text:'#files but
 import*as encryptedSync from'./sync.js';
 import './core.js';
 import {translator,messages} from './i18n.js';
+import {searchFiles} from './search.js';
 const {lang,t,bytes}=translator(navigator.language);document.documentElement.lang=lang;document.querySelectorAll('[data-i18n]').forEach(n=>n.textContent=t(n.dataset.i18n));document.querySelectorAll('[data-i18n-aria]').forEach(n=>n.setAttribute('aria-label',t(n.dataset.i18nAria)));
 import {createHost} from './host.js';
 import {clientRuntimeProblems,createClientConsentHost,createClientOperationBroker} from './runtime.js';
@@ -14,8 +15,82 @@ const core=window.AwaiDriveCore,$=id=>document.getElementById(id),host=createHos
 function message(s){$('status').textContent=s;}
 async function call(op,extra={}){if(!core.validPath(parent))throw Error('invalid-path');return window.__TAURI__.core.invoke('drive_call',{request:{op,parent,...extra}});}
 function fail(e){const s=String(e?.message||e);const label=t(Object.keys(messages[lang]).find(key=>key.startsWith('error.')&&s.includes(key.slice(6)))||'error.unknown');message(label);if($('edit').open)$('form-error').textContent=label;}
-async function list(){const r=await call('list');$('files').replaceChildren();$('path').textContent=parent||t('storage.root');$('back').hidden=!parent;for(const item of r.entries){const li=document.createElement('li'),b=document.createElement('button'),label=document.createElement('span'),sub=document.createElement('small');label.textContent=(item.directory?'▸ ':'')+item.name;sub.textContent=item.directory?t('folder.caption'):t('file.caption',{size:bytes(item.bytes)});b.append(label,sub);b.onclick=()=>task(async()=>{if(item.directory){parent=item.path;await list();}else await call('open',{path:item.path});});li.append(b);$('files').append(li);}message(r.entries.length?'':t('status.empty'));const syncState=await encryptedSync.state();$('evict').hidden=!encryptedSync.configured||!syncState.canEvict;$('restore-legacy').hidden=!syncState.legacyRestore;$('storage').textContent=t(syncState.synced?'sync.ready':syncState.evicted?'sync.evicted':encryptedSync.configured?'sync.dirty':'storage.state');}
+function renderEntries(entries, showLocation = false) {
+  const rows = document.createDocumentFragment();
+  for (const item of entries) {
+    const row = document.createElement('li');
+    const button = document.createElement('button');
+    const label = document.createElement('span');
+    const caption = document.createElement('small');
+    label.textContent = (item.directory ? '▸ ' : '') + item.name;
+    caption.textContent = item.directory ? t('folder.caption') : t('file.caption', { size: bytes(item.bytes) });
+    button.append(label, caption);
+    if (showLocation) {
+      const location = document.createElement('small');
+      location.textContent = item.path.split('/').slice(0, -1).join('/') || t('storage.root');
+      button.append(location);
+    }
+    button.onclick = () => task(async () => {
+      if (item.directory) {
+        parent = item.path;
+        await list();
+        $('files').focus();
+      } else {
+        await call('open', { path: item.path });
+      }
+    });
+    row.append(button);
+    rows.append(row);
+  }
+  $('files').replaceChildren(rows);
+}
+
+async function list() {
+  const { entries } = await call('list');
+  $('search-heading').hidden = true;
+  $('search-query').value = '';
+  $('path').closest('nav').hidden = false;
+  $('import').closest('section').hidden = false;
+  $('path').textContent = parent || t('storage.root');
+  $('back').hidden = !parent;
+  renderEntries(entries);
+  message(entries.length ? '' : t('status.empty'));
+  const syncState = await encryptedSync.state();
+  $('evict').hidden = !encryptedSync.configured || !syncState.canEvict;
+  $('restore-legacy').hidden = !syncState.legacyRestore;
+  $('storage').textContent = t(syncState.synced ? 'sync.ready' : syncState.evicted ? 'sync.evicted' : encryptedSync.configured ? 'sync.dirty' : 'storage.state');
+}
+
+async function showSearch(query) {
+  $('path').closest('nav').hidden = true;
+  $('import').closest('section').hidden = true;
+  $('search-heading').textContent = t('search.heading', { query });
+  $('search-heading').hidden = false;
+  renderEntries([]);
+  message(t('search.running'));
+  const input = $('search-query');
+  input.readOnly = true;
+  try {
+    const { entries, limited } = await searchFiles(query, async folder =>
+      (await call('list', { parent: folder })).entries);
+    renderEntries(entries, true);
+    const key = limited ? 'search.limited' : entries.length ? 'search.count' : 'search.empty';
+    message(t(key, { count: new Intl.NumberFormat(lang).format(entries.length) }));
+  } finally {
+    input.readOnly = false;
+  }
+}
+
 async function task(fn){if(busy)return;busy=true;document.querySelectorAll('main button,#edit button').forEach(x=>x.disabled=true);try{await fn();}catch(e){fail(e);}finally{busy=false;document.querySelectorAll('main button,#edit button').forEach(x=>x.disabled=false);}}
+$('search-form').onsubmit = event => {
+  event.preventDefault();
+  const query = $('search-query').value.trim();
+  task(query ? () => showSearch(query) : list);
+};
+$('search-clear').onclick = () => task(async () => {
+  $('search-query').focus();
+  await list();
+});
 $('back').onclick=()=>task(async()=>{parent=parent.split('/').slice(0,-1).join('/');await list();});$('refresh').onclick=()=>task(list);
 $('import').onclick=()=>task(async()=>{message(t('status.importing'));await call('pick');await list();message(t('status.saved'));});
 function edit(op){mode=op;$('title').textContent=t(op==='mkdir'?'folder.create':'file.note');$('content-label').hidden=op==='mkdir';$('name').value='';$('content').value='';$('form-error').textContent='';$('edit').showModal();$('name').focus();}
