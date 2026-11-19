@@ -17,9 +17,9 @@ const aliases = new Map([
   ['@ipld/dag-cbor', 'codec']
 ]);
 const checkout = process.env.AWAI_DRIVE_WNFS_SOURCE;
-if (!checkout) throw new Error('AWAI_DRIVE_WNFS_SOURCE must name the authorized apex checkout');
+if (!checkout) throw new Error('AWAI_DRIVE_WNFS_SOURCE must name the authorized network-awai/awai-fs checkout');
 for (const [path, sha256] of Object.entries(pins.wnfs.files)) {
-  const bytes = execFileSync('git', ['-C', checkout, 'show', pins.wnfs.revision + ':otehon/wnfs-cljc/src/' + path]);
+  const bytes = execFileSync('git', ['-C', checkout, 'show', pins.wnfs.revision + ':src/' + path]);
   if (createHash('sha256').update(bytes).digest('hex') !== sha256) {
     throw new Error('WNFS upstream pin drift: ' + path);
   }
