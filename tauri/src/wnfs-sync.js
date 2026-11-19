@@ -72,7 +72,7 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
     }
   }
 
-  async function readSnapshot(session, operation, extension, guard) {
+  async function readSnapshot(session, operation, extension, releaseKey, guard) {
     const head = session.wnfs;
     validateHead(head);
     const started = performance.now();
@@ -91,8 +91,9 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
     }
     if (guard) await guard();
     const fetched = performance.now();
-    const snapshot = await compute(operation, session, { root: head.root, capsule, packs: data, extension },
-      [capsule.buffer, ...data.map(pack => pack.buffer)]);
+    const buffers = [capsule.buffer, ...data.map(pack => pack.buffer)];
+    if (releaseKey) buffers.push(releaseKey.buffer);
+    const snapshot = await compute(operation, session, { root: head.root, capsule, packs: data, extension, releaseKey }, buffers);
     if (guard) await guard();
     if (Array.isArray(snapshot)) return snapshot;
     return { ...snapshot, fetchMs: fetched - started, openMs: performance.now() - fetched, bytes: size + capsuleBytes };
@@ -108,21 +109,25 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
       if (source?.subject !== subject || typeof source.deviceId !== 'string' || !DEVICE_ID.test(source.deviceId) ||
           deviceIds.has(source.deviceId) || typeof source.basis !== 'string' || !BASIS_ID.test(source.basis) ||
           typeof source.owner?.record !== 'string' || !source.owner.record || source.owner.record.length > 16000 ||
-          !(source.owner.secret instanceof Uint8Array) || source.owner.secret.length !== 32) {
+          !(source.owner.secret instanceof Uint8Array) || source.owner.secret.length !== 32 ||
+          (source.releaseKey !== undefined &&
+            (!(source.releaseKey instanceof Uint8Array) || source.releaseKey.length !== 32))) {
         throw Error('invalid-account-snapshot-grant');
       }
       validateHead(source.owner.wnfs);
       deviceIds.add(source.deviceId);
     }
     const entries = [];
-    const admitted = sources.map(({ owner, deviceId, basis }) => ({
-      deviceId, basis,
+    const admitted = sources.map(({ owner, deviceId, basis, releaseKey }) => ({
+      deviceId, basis, releaseKey: releaseKey?.slice(),
       owner: { record: owner.record, secret: owner.secret.slice(),
         wnfs: { ...owner.wnfs, packs: [...owner.wnfs.packs] } }
     }));
     try {
-      for (const { owner, deviceId, basis } of admitted) {
-        const catalog = await readSnapshot(owner, 'catalog', undefined, guard);
+      for (const { owner, deviceId, basis, releaseKey } of admitted) {
+        // readSnapshot transfers the key buffer to the worker; pass a copy so the
+        // admitted key can still be cleared here.
+        const catalog = await readSnapshot(owner, 'catalog', undefined, releaseKey?.slice(), guard);
         if (catalog.basis !== basis) throw Error('snapshot-basis-mismatch');
         for (const { path, directory = false } of catalog.rows) {
           entries.push({ path, directory, sourceDevice: deviceId });
@@ -131,23 +136,33 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
       if (guard) await guard();
       return entries;
     } finally {
-      for (const { owner } of admitted) owner.secret.fill(0);
+      for (const { owner, releaseKey } of admitted) { owner.secret.fill(0); releaseKey?.fill(0); }
     }
   }
 
   return {
     restoreCopy,
     publicRecipient: session => compute('public-recipient', session, {}, []),
-    async grant(session, recipient) {
+    async grant(session, recipient, proof) {
       const verified = await compute('validate-recipient', session, { recipient }, []);
-      return invoke('vaultWnfsRecipientSet', { id: verified.id, recipient: verified });
+      return invoke('vaultWnfsRecipientSet', { id: verified.id, recipient: verified, proof });
     },
     revoke: id => invoke('vaultWnfsRecipientSet', { id }),
     async restoreShared(session, grant) {
       const recipient = await compute('public-recipient', session, {}, []);
-      if (grant?.schema !== 'awai.drive.wnfs.grant.v1' || grant.recipient !== recipient.id ||
-          typeof grant.basis !== 'string' || !grant.basis) throw Error('invalid-snapshot-grant');
-      const snapshot = await readSnapshot({ ...session, wnfs: grant.head }, 'open-share', 'txt');
+      const gated = grant?.schema === 'awai.drive.wnfs.grant.v2';
+      if ((!gated && grant?.schema !== 'awai.drive.wnfs.grant.v1') || grant.recipient !== recipient.id ||
+          typeof grant.basis !== 'string' || !grant.basis ||
+          (gated && (typeof grant.releaseKey !== 'string' || !/^[A-Za-z0-9+/]{43}=$/.test(grant.releaseKey)))) {
+        throw Error('invalid-snapshot-grant');
+      }
+      const releaseKey = gated ? unb64(grant.releaseKey) : null;
+      let snapshot;
+      try {
+        snapshot = await readSnapshot({ ...session, wnfs: grant.head }, 'open-share', 'txt', releaseKey);
+      } finally {
+        if (releaseKey?.byteLength) releaseKey.fill(0);
+      }
       const { rows, entries, ...verified } = snapshot;
       if (verified.basis !== grant.basis) {
         for (const { chunks = [] } of rows) for (const chunk of chunks) chunk.fill(0);
@@ -156,11 +171,13 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
       const published = await restoreCopy(rows, false, { share: grant.head.capsule, entries });
       return { ...published, ...verified };
     },
-    async sync(session) {
+    async sync(session, selectRecipients = items => Object.values(items)) {
       const { entries } = await invoke('vaultWnfsInventory');
-      const { revision, items } = await invoke('vaultWnfsRecipients');
+      const { revision, items, proofs } = await invoke('vaultWnfsRecipients');
+      const recipients = await selectRecipients(items, proofs);
       if (!entries.length) throw Error('empty-sync-snapshot');
       const rows = [];
+      let sealed;
       try {
         for (const entry of entries) {
           if (entry.directory) {
@@ -179,25 +196,31 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
           if (await sha256(bytes) !== entry.sha256) throw Error('source-size-changed');
         }
         const sealStart = performance.now();
-        const sealed = await compute('seal', session, { rows, recipients: Object.values(items) },
+        sealed = await compute('seal', session, { rows, recipients },
           rows.flatMap(row => row.bytes ? [row.bytes.buffer] : []));
         const publishStart = performance.now();
         const packBytes = sealed.packs.reduce((n, pack) => n + pack.length, sealed.capsule.bytes.length);
         const dataIds = [];
         for (const pack of sealed.packs) dataIds.push(await packs.publish(pack, verifyReceipt));
         const capsule = await packs.publish(sealed.capsule.bytes, verifyReceipt);
-        const grants = [];
-        for (const { recipient, capsule: wrapped } of sealed.grants ?? []) {
+        const pendingGrants = [];
+        for (const { recipient, capsule: wrapped, releaseKey } of sealed.grants ?? []) {
           const id = await packs.publish(wrapped.bytes, verifyReceipt);
-          grants.push({ schema: 'awai.drive.wnfs.grant.v1', recipient, basis: sealed.basis,
-            head: { schema: 'awai.drive.wnfs.v1', origin, root: wrapped.root, capsule: id, packs: dataIds } });
+          pendingGrants.push({ recipient, releaseKey, root: wrapped.root, id });
         }
         const publishedAt = performance.now();
         await invoke('vaultWnfsCommit', { root: sealed.capsule.root, capsule, packs: dataIds, origin, entries, recipientRevision: revision });
+        // Storage can retain a failed publication. The key needed to open
+        // each recipient capsule leaves the app only after the ACL commit.
+        const grants = pendingGrants.map(({ recipient, releaseKey, root, id }) => ({
+          schema: 'awai.drive.wnfs.grant.v2', recipient, basis: sealed.basis, releaseKey: b64(releaseKey),
+          head: { schema: 'awai.drive.wnfs.v1', origin, root, capsule: id, packs: dataIds },
+        }));
         return { files: rows.filter(row => !row.directory).length, basis: sealed.basis,
           bytes: packBytes, grants, dataPacks: dataIds.length, sealMs: publishStart - sealStart, publishMs: publishedAt - publishStart };
       } finally {
         for (const row of rows) if (row.bytes?.byteLength) row.bytes.fill(0);
+        for (const grant of sealed?.grants ?? []) grant.releaseKey.fill(0);
       }
     },
 
@@ -212,15 +235,26 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
         throw Error('invalid-account-snapshot-grant');
       }
       const recipient = await compute('public-recipient', session, {}, []);
-      const admitted = sources.map(source => {
-        const grant = source?.grant;
-        if (grant?.schema !== 'awai.drive.wnfs.grant.v1' || grant.recipient !== recipient.id) {
-          throw Error('invalid-snapshot-grant');
-        }
-        return {subject: source.subject, deviceId: source.deviceId, basis: grant.basis,
-          owner: {record: session.record, secret: session.secret, wnfs: grant.head}};
-      });
-      return catalogAuthorizedAccount({subject, sources: admitted}, guard);
+      // v2 grants carry the capsule release key, which the sender releases only
+      // after its ACL revision commits; a v2 grant without one is refused.
+      const keys = [];
+      try {
+        const admitted = sources.map(source => {
+          const grant = source?.grant;
+          const gated = grant?.schema === 'awai.drive.wnfs.grant.v2';
+          if ((!gated && grant?.schema !== 'awai.drive.wnfs.grant.v1') || grant.recipient !== recipient.id ||
+              (gated && (typeof grant.releaseKey !== 'string' || !/^[A-Za-z0-9+/]{43}=$/.test(grant.releaseKey)))) {
+            throw Error('invalid-snapshot-grant');
+          }
+          const releaseKey = gated ? unb64(grant.releaseKey) : undefined;
+          if (releaseKey) keys.push(releaseKey);
+          return {subject: source.subject, deviceId: source.deviceId, basis: grant.basis, releaseKey,
+            owner: {record: session.record, secret: session.secret, wnfs: grant.head}};
+        });
+        return await catalogAuthorizedAccount({subject, sources: admitted}, guard);
+      } finally {
+        for (const key of keys) key.fill(0);
+      }
     },
 
     async restore(session) {

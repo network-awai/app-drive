@@ -47,3 +47,4 @@ Object.prototype.rows;
 Object.prototype.pq;
 Object.prototype.pub;
 Object.prototype.grants;
+Object.prototype.releaseKey;

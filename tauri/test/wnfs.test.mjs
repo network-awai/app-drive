@@ -80,15 +80,18 @@ test('a distinct owner and recipient share a basis, and a revoked recipient cann
     const recipient = await wnfs.publicRecipient(b);
     assert.deepEqual(Object.keys(recipient).sort(), ['id', 'pq', 'pub']);
     const first = await wnfs.seal(a, alice, [{ path: 'first.txt', bytes: Uint8Array.of(1, 2) }], [recipient]);
-    const { capsule } = first.grants[0];
-    const opened = await wnfs.openSnapshot(b, bob, capsule.root, capsule.bytes, first.packs);
+    const { capsule, releaseKey } = first.grants[0];
+    await assert.rejects(wnfs.openSnapshot(b, bob, capsule.root, capsule.bytes, first.packs));
+    await assert.rejects(wnfs.openSnapshot(b, bob, capsule.root, capsule.bytes, first.packs, new Uint8Array(32)));
+    const opened = await wnfs.openSnapshot(b, bob, capsule.root, capsule.bytes, first.packs, releaseKey);
     assert.equal(opened.basis, first.basis);
     assert.deepEqual(wnfs.inventory(opened.rows), [{ path: 'first.txt', directory: false, size: 2, sha256: sha(Uint8Array.of(1, 2)) }]);
     const { createWnfsSync } = await import('../src/wnfs-sync.js');
     const origin = 'https://storage.example';
     const blocks = new Map([capsule.bytes, ...first.packs].map(bytes => [sha(bytes), bytes]));
     const subject = 'did:key:zExisting';
-    const grant = { schema: 'awai.drive.wnfs.grant.v1', recipient: recipient.id, basis: first.basis,
+    const grant = { schema: 'awai.drive.wnfs.grant.v2', recipient: recipient.id, basis: first.basis,
+      releaseKey: Buffer.from(releaseKey).toString('base64'),
       head: { schema: 'awai.drive.wnfs.v1', origin, root: capsule.root, capsule: sha(capsule.bytes),
         packs: first.packs.map(sha) } };
     let downloads = 0;
@@ -98,22 +101,28 @@ test('a distinct owner and recipient share a basis, and a revoked recipient cann
       async compute(op, session, input) {
         if (op === 'public-recipient') return wnfs.publicRecipient(session.record);
         assert.equal(op, 'catalog');
-        return wnfs.catalog(session.record, session.secret, input.root, input.capsule, input.packs);
+        assert.equal(input.releaseKey.length, 32);
+        return wnfs.catalog(session.record, session.secret, input.root, input.capsule, input.packs, input.releaseKey);
       },
     });
     const sources = [{ subject, deviceId: 'sender-device', grant }];
     await assert.rejects(reader.catalogAccountRecipients({record: a, secret: alice}, {subject, sources}),
       /invalid-snapshot-grant/);
     assert.equal(downloads, 0);
+    const { releaseKey: _omitted, ...ungated } = grant;
+    await assert.rejects(reader.catalogAccountRecipients({record: b, secret: bob},
+      {subject, sources: [{ subject, deviceId: 'sender-device', grant: ungated }]}), /invalid-snapshot-grant/);
+    assert.equal(downloads, 0);
     assert.deepEqual(await reader.catalogAccountRecipients({record: b, secret: bob}, {subject, sources}),
       [{path: 'first.txt', directory: false, sourceDevice: 'sender-device'}]);
-    await assert.rejects(wnfs.open(a, alice, capsule.root, capsule.bytes, first.packs));
+    await assert.rejects(wnfs.openSnapshot(a, alice, capsule.root, capsule.bytes, first.packs, releaseKey));
     const next = await wnfs.seal(a, alice, [{ path: 'next.txt', bytes: Uint8Array.of(3) }], []);
     assert.equal(next.grants.length, 0);
     assert.notEqual(next.basis, first.basis);
     await assert.rejects(wnfs.open(b, bob, next.capsule.root, next.capsule.bytes, next.packs));
-    await assert.rejects(wnfs.open(b, bob, capsule.root, capsule.bytes, next.packs));
-    assert.equal((await wnfs.openSnapshot(b, bob, capsule.root, capsule.bytes, first.packs)).basis, first.basis);
+    await assert.rejects(wnfs.openSnapshot(b, bob, capsule.root, capsule.bytes, next.packs, releaseKey));
+    assert.equal((await wnfs.openSnapshot(b, bob, capsule.root, capsule.bytes, first.packs, releaseKey)).basis, first.basis);
+    releaseKey.fill(0);
   } finally { alice.fill(0); bob.fill(0); }
 });
 
@@ -245,4 +254,34 @@ test('account catalog requires bound sources and reports only verified snapshot 
   denied = ids('e');
   await assert.rejects(wnfs.catalogAuthorizedAccount({ subject, sources: grants }), /operation-denied/);
   assert.deepEqual(requests, [ids('b'), ids('c'), ids('e')]);
+});
+
+test('a publish rejected for a stale recipient revision discards its release key', async () => {
+  const { createWnfsSync } = await import('../src/wnfs-sync.js');
+  const origin = 'https://storage.example';
+  const data = Uint8Array.of(1), owner = Uint8Array.of(2), recipient = Uint8Array.of(3);
+  const publishCalls = [];
+  const releaseKey = new Uint8Array(32).fill(19);
+  const sync = createWnfsSync({
+    origin,
+    async invoke(operation, request) {
+      if (operation === 'vaultWnfsInventory') return { entries: [{ path: 'empty', directory: true }] };
+      if (operation === 'vaultWnfsRecipients') return { revision: 7, items: {} };
+      assert.equal(operation, 'vaultWnfsCommit');
+      assert.equal(request.recipientRevision, 7);
+      assert.deepEqual(publishCalls, [data, owner, recipient]);
+      throw Error('recipient-grants-changed');
+    },
+    packs: { async publish(bytes) {
+      publishCalls.push(bytes);
+      return sha(bytes);
+    } },
+    async compute(operation) {
+      assert.equal(operation, 'seal');
+      return { basis: 'forest', packs: [data], capsule: { root: sha(owner), bytes: owner },
+        grants: [{ recipient: 'test-recipient', capsule: { root: sha(recipient), bytes: recipient }, releaseKey }] };
+    },
+  });
+  await assert.rejects(sync.sync({}), /recipient-grants-changed/);
+  assert.deepEqual(releaseKey, new Uint8Array(32));
 });
