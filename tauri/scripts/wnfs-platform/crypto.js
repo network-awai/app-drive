@@ -1,6 +1,12 @@
 // Browser provider for the pinned CLJC WNFS accumulator and nonce APIs.
 import { pow } from '@noble/curves/abstract/modular';
 import { bytesToNumberBE } from '@noble/curves/abstract/utils';
+import { sha256 } from '@noble/hashes/sha256';
+
+export function createHash(algorithm) {
+  if (algorithm !== 'sha256') throw new Error('unsupported-wnfs-hash');
+  return sha256.create();
+}
 
 export function randomBytes(length) {
   return globalThis.crypto.getRandomValues(new Uint8Array(length));

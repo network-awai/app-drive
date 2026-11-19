@@ -1,10 +1,13 @@
 import './check-platform.mjs';
-import {mkdir,copyFile,readFile,writeFile,rm} from 'node:fs/promises';import {fileURLToPath} from 'node:url';import{resolve}from'node:path';import{createHash}from'node:crypto';
+import {mkdir,copyFile,readFile,writeFile,rm,readdir} from 'node:fs/promises';import {fileURLToPath} from 'node:url';import{resolve}from'node:path';import{createHash}from'node:crypto';
 const app=fileURLToPath(new URL('../',import.meta.url)),out=resolve(app,'dist'),hash=b=>createHash('sha256').update(b).digest('hex');await mkdir(out,{recursive:true});
 for(const n of ['index.html','style.css','app.js','search.js','i18n.js','sync.js','sync-contract.js','account-link.js','account-heads.js','wnfs-sync.js','wnfs-worker.js','share-controls.js','account-share.js','wnfs-account.js'])await copyFile(resolve(app,'src',n),resolve(out,n));
 for (const name of ['drive-packs.mjs', 'bounded-response.mjs', 'account-link-core.js']) {
   await copyFile(resolve(app,'vendor/platform',name),resolve(out,name));
 }
+const icons=(await readdir(resolve(app,'src/icons'))).map(name=>'icons/'+name);
+await mkdir(resolve(out,'icons'),{recursive:true});
+for(const name of icons)await copyFile(resolve(app,'src',name),resolve(out,name));
 await copyFile(resolve(app,'generated/core.js'),resolve(out,'core.js'));await copyFile(resolve(app,'generated/receipt.js'),resolve(out,'receipt.js'));await copyFile(resolve(app,'vendor/platform/host.js'),resolve(out,'host.js'));await copyFile(resolve(app,'vendor/platform/awai-ui/assets/noto-jp.woff2'),resolve(out,'noto-jp.woff2'));
 await copyFile(resolve(app,'vendor/platform/kotoba-client-runtime.js'),resolve(out,'runtime.js'));
 const {runtimeFor}=await import('../src/sync-contract.js');const origin=process.env.AWAI_DRIVE_SYNC_ORIGIN||'';
@@ -27,12 +30,11 @@ const tauriFile=resolve(app,'src-tauri/tauri.conf.json'),config=JSON.parse(await
 config.app.security.csp="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; "+(wnfsEnabled?"worker-src 'self'; ":"")+clientRuntimeConnectSrc(descriptor,capabilities,[],'http://tauri.localhost').replace("'none'",'')+" ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'";
 await writeFile(tauriFile,JSON.stringify(config,null,2)+'\n');
 await writeFile(resolve(out,'descriptor.json'),JSON.stringify(descriptor,null,2));
-const names=['index.html','style.css','app.js','search.js','i18n.js','sync.js','sync-contract.js','account-link.js','account-heads.js','wnfs-sync.js','wnfs-worker.js','share-controls.js','account-share.js','wnfs-account.js','drive-packs.mjs','bounded-response.mjs','account-link-core.js','sync-config.js','core.js','receipt.js','host.js','noto-jp.woff2','runtime.js','descriptor.json',...(wnfsEnabled?['wnfs-core.js']:[])],files={};for(const n of names)files[n]=hash(await readFile(resolve(out,n)));
+const names=['index.html','style.css','app.js','search.js','i18n.js','sync.js','sync-contract.js','account-link.js','account-heads.js','wnfs-sync.js','wnfs-worker.js','share-controls.js','account-share.js','wnfs-account.js','drive-packs.mjs','bounded-response.mjs','account-link-core.js','sync-config.js','core.js','receipt.js','host.js','noto-jp.woff2','runtime.js','descriptor.json',...icons,...(wnfsEnabled?['wnfs-core.js']:[])],files={};for(const n of names)files[n]=hash(await readFile(resolve(out,n)));
 await writeFile(resolve(out,'release.json'),JSON.stringify({schema:'awai.app.artifact.v1',id:'network.awai.drive',version:'0.1.0',tauri:'3.0.0-alpha.6',runtimeWry:'3.0.0-alpha.6',sharedCore:{source:'core/awai/drive/domain.cljc',sha256:hash(await readFile(resolve(app,'core/awai/drive/domain.cljc')))},profile:wnfsEnabled?'WNFS PrivateForest + bounded CARv1; Android device custody; explicit HTTPS sync':'Bounded owner-store object-v2/CAR snapshot; Android device custody; explicit HTTPS sync',files},null,2));console.log('Drive static artifact built with pinned canonical runtime');
 
 const { distributeUi } = await import('../vendor/platform/awai-ui/distribute.mjs');
 await distributeUi(out);
-const {readdir}=await import('node:fs/promises');
 async function uiFiles(dir,rel=''){let result=[];for(const e of await readdir(resolve(dir,rel),{withFileTypes:true})){const n=rel?rel+'/'+e.name:e.name;if(e.isDirectory())result.push(...await uiFiles(dir,n));else if(e.isFile())result.push(n);}return result;}
 const releasePath=resolve(out,'release.json'),updated=JSON.parse(await readFile(releasePath,'utf8'));
 for(const n of await uiFiles(resolve(out,'awai-ui')))updated.files['awai-ui/'+n]=hash(await readFile(resolve(out,'awai-ui',n)));

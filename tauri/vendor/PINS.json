@@ -55,19 +55,19 @@
     "sha256": "ed8e3d96f9262b7b093a07983953273a3fc007d9fb9ceecab7e2c12cbb2a4704"
   },
   "wnfs": {
-    "repository": "https://github.com/network-awai/network-awai-apex",
-    "revision": "a12ea614330b6f194e06bcb960a6c9db928c6a65",
+    "repository": "https://github.com/network-awai/awai-fs",
+    "revision": "c9a29ce12597a3388aa4190ecd019ca31206c113",
     "files": {
       "awai/wnfs/accumulator.cljc": "c0f7a38f64f712491f6439d9b81a9af0e58c077722113eddf81f264430e4cdc3",
-      "awai/wnfs/blocks.cljc": "634e88ffd5d4edd423037cbfd5ff8560c0d5b62e166d86c709f633ecd598de7b",
-      "awai/wnfs/forest.cljc": "4d18cb31f49a1ac946390c44f79db8cef1cd404402961c083d3449ab38624ea0",
+      "awai/wnfs/blocks.cljc": "fe65671bfe93db1832ba4483eea57d15585ee9c74ee02c36d8b542c45e27e2b0",
+      "awai/wnfs/forest.cljc": "d0d6f2fc697f4c9f3659d342786cf39b8e396ed60e4fcde31859a519b40f81dc",
       "awai/wnfs/keywrap.cljc": "06e8d3c84147ce42fc32dc684c54c1b5619614521233e6908664fc87544dbc82",
-      "awai/wnfs/model.cljc": "3ab7d6240e0ba071b99e533038bbc7f5edc869f09ce2c4293af49dd0126e4acd",
+      "awai/wnfs/model.cljc": "89d94dd2aad2626171c8c7894a0e7a9cb02b4261cb7699a8c20a15f53af10b63",
       "awai/wnfs/otehon.cljc": "abfcf18be01c2e75a8be45d6b800da6510493e89595239eb3cc9d4173937e20c",
-      "awai/wnfs/private_node.cljc": "5a060b02a10859674ed96ff5abada6e8a0092fe76d981ba6811ab5f223876ad4",
-      "awai/wnfs/private_tree.cljc": "b93be80008dd73c87d7215c1b2b1c2cd8fa3bc33fa1c7b44bb14e9c4742a0416",
+      "awai/wnfs/private_node.cljc": "a74b92bf057058ef5fe1fe9ad55c8d75540aaf6355c151b7c5f5b72c654d4b5e",
+      "awai/wnfs/private_tree.cljc": "ac20927b8f9f623d512bc35912dfe907569f4b06a7f9299577d517b05471adf3",
       "awai/wnfs/ratchet.cljc": "76deaa7415c8fd58ce3417804fcff6df2511f82d85cefa9c2328838c3955dcbe",
-      "awai/wnfs/wire.cljc": "c929ad47882986f8ea362fefa145153a3bbb0d2d2075639a0832a437d581efb2"
+      "awai/wnfs/wire.cljc": "5726785b0520b3327ecb70d4666cdcc7286464a20e45772b43587fc903fe2f38"
     }
   },
   "query": {

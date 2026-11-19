@@ -239,6 +239,18 @@ test('account catalog requires bound sources and reports only verified snapshot 
     /snapshot-basis-mismatch/);
   assert.deepEqual(requests, [ids('b'), ids('c')]);
   requests.length = 0;
+  let checks = 0;
+  await assert.rejects(wnfs.catalogAuthorizedAccount({ subject, sources: grants }, async () => {
+    if (++checks === 2) throw Error('account-head-policy-unavailable');
+  }), /account-head-policy-unavailable/);
+  assert.deepEqual(requests, [ids('b')]);
+  requests.length = 0;
+  checks = 0;
+  await assert.rejects(wnfs.catalogAuthorizedAccount({ subject, sources: [grants[0]] }, async () => {
+    if (++checks === 5) throw Error('account-head-policy-unavailable');
+  }), /account-head-policy-unavailable/);
+  assert.deepEqual(requests, [ids('b'), ids('c')]);
+  requests.length = 0;
   denied = ids('e');
   await assert.rejects(wnfs.catalogAuthorizedAccount({ subject, sources: grants }), /operation-denied/);
   assert.deepEqual(requests, [ids('b'), ids('c'), ids('e')]);

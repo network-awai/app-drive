@@ -1,7 +1,7 @@
 import { createDrivePackClient } from './drive-packs.mjs';
 import './core.js';
 import {createDriveAccountLink} from './account-link.js';
-import {discoverAccountHeads} from './account-heads.js';
+import {accountHeadGuard, discoverAccountHeads} from './account-heads.js';
 import { createWnfsSync } from './wnfs-sync.js';
 import { createAccountSharing } from './account-share.js';
 import{createClientConsentHost,createClientOperationBroker}from'./runtime.js';
@@ -85,8 +85,9 @@ export async function catalogAuthorizedAccount(grant) {
 
 
 // Only an authenticated host may provide the discovery callback and issuer key.
-export async function catalogVerifiedRecipientHeads({requestHeads, issuerKey}) {
+export async function catalogVerifiedRecipientHeads({requestHeads, issuerKey, checkCurrentPolicy}) {
   if (!configured || !wnfsEnabled || !accountLinkEnabled) throw Error('recovery-required');
+  if (typeof checkCurrentPolicy !== 'function') throw Error('account-head-policy-unavailable');
   const link = createDriveAccountLink({call: invoke});
   const account = await link.linkedAccount();
   if (!account) throw Error('invalid-account-snapshot-grant');
@@ -102,9 +103,8 @@ export async function catalogVerifiedRecipientHeads({requestHeads, issuerKey}) {
     });
     const current = await link.linkedAccount();
     if (current?.accountDid !== account.accountDid) throw Error('invalid-account-snapshot-grant');
-    return await wnfs.catalogAccountRecipients(reader, headList, () => {
-      if (Date.now() >= headList.expires) throw Error('invalid-account-heads');
-    });
+    const guard = accountHeadGuard(headList, checkCurrentPolicy);
+    return await wnfs.catalogAccountRecipients(reader, headList, guard);
   } finally {
     secret.fill(0);
   }
