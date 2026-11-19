@@ -48,7 +48,7 @@ fn sync_dir(p: &Path) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn available(p: &Path) -> Option<u64> {
+pub(crate) fn available(p: &Path) -> Option<u64> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
     let c = CString::new(p.as_os_str().as_bytes()).ok()?;

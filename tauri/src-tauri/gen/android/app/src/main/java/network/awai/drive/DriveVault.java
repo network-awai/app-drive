@@ -106,7 +106,8 @@ public final class DriveVault {
     .put("schema","awai.drive.wnfs.v1")
     .put("root",digestId(request.getString("root")))
     .put("capsule",capsule).put("packs",packs)
-    .put("origin",request.getString("origin")).put("entries",entries);
+    .put("origin",request.getString("origin")).put("entries",entries)
+    .put("basis",request.optString("basis", ""));
   // Keep the v1 root, original inventory, owner record and keys intact.
   control.put("wnfs",head);
   save(control,false);

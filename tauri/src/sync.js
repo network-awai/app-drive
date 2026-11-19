@@ -53,8 +53,9 @@ export async function sync(){const s=await session(true);try{
  await invoke('vaultCommit',{root:sealed.root,pack:id,origin:syncOrigin,entries});return {files:rows.length,root:sealed.root,pack:id};
  }finally{s.secret.fill(0);}}
 export async function evict(){return invoke('vaultEvict',{origin:syncOrigin});}
-export async function restore({legacy=false}={}){const s=await session();try{
- if(s.wnfs&&!legacy){if(!wnfsEnabled)throw Error('recovery-required');return await wnfs.restore(s);}
+export async function restore({legacy=false, expectedPack, signal, progress}={}){const s=await session();try{
+ if(expectedPack && s.wnfs?.capsule !== expectedPack)throw Error('snapshot-basis-mismatch');
+ if(s.wnfs&&!legacy){if(!wnfsEnabled)throw Error('recovery-required');return await wnfs.restore(s, { signal, progress });}
  if(!s.root||!s.pack||s.origin!==syncOrigin)throw Error('recovery-required');const bytes=await packs.download(s.pack);const rows=await core.openSnapshot(s.record,s.secret,s.root,bytes);
  if(wnfsEnabled)return await wnfs.restoreCopy(rows.map(row=>({path:row.path,chunks:[row.bytes]})),true);
  // Authenticate and validate all plaintext before staging or publishing output.
@@ -75,7 +76,37 @@ async function sharing(action) {
 export const publicSnapshotRecipient = () => sharing(owner => wnfs.publicRecipient(owner));
 export const grantSnapshotRecipient = recipient => sharing(owner => wnfs.grant(owner, recipient));
 export const revokeSnapshotRecipient = id => sharing(() => wnfs.revoke(id));
-export const restoreSharedSnapshot = grant => sharing(owner => wnfs.restoreShared(owner, grant));
+export const restoreSharedSnapshot = (grant, controls) => sharing(owner => wnfs.restoreShared(owner, grant, controls));
+
+export async function restorePoint() {
+  if (!configured || !wnfsEnabled) return null;
+  const { wnfs: head } = await invoke('vaultSession', { initialize: false });
+  if (head?.origin !== syncOrigin) return null;
+  const files = (head.entries ?? []).filter(entry => !entry.directory);
+  return {
+    pack: head.capsule, basis: /^b[a-z2-7]{20,128}$/.test(head.basis) ? head.basis : null,
+    count: files.length, size: files.reduce((total, item) => total + item.size, 0),
+  };
+}
+
+export function parseRestoreGrant(text) {
+  let grant;
+  try { grant = JSON.parse(text); } catch { throw Error('invalid-snapshot-grant'); }
+  if (Array.isArray(grant) && grant.length === 1) [grant] = grant;
+  const head = grant?.head;
+  const digest = /^[a-f0-9]{64}$/;
+  if (grant?.schema !== 'awai.drive.wnfs.grant.v1' || !/^kv1:[A-Za-z0-9_-]{43}$/.test(grant.recipient) ||
+      !/^b[a-z2-7]{20,128}$/.test(grant.basis) || head?.schema !== 'awai.drive.wnfs.v1' ||
+      head.origin !== syncOrigin || !digest.test(head.root) || !digest.test(head.capsule) ||
+      !Array.isArray(head.packs) || head.packs.length < 1 || head.packs.length > 8 ||
+      head.packs.some(id => typeof id !== 'string' || !digest.test(id)) ||
+      new Set([head.capsule, ...head.packs]).size !== head.packs.length + 1) throw Error('invalid-snapshot-grant');
+  return { schema: grant.schema, recipient: grant.recipient, basis: grant.basis, head: {
+    schema: head.schema, origin: head.origin, root: head.root, capsule: head.capsule, packs: head.packs,
+  } };
+}
+
+export const restoreOrigin = syncOrigin;
 export async function catalogAuthorizedAccount(grant) {
   if (!configured || !wnfsEnabled) throw Error('recovery-required');
   return wnfs.catalogAuthorizedAccount(grant);
