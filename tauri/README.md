@@ -128,17 +128,23 @@ historical. [Encrypted VM qualification](docs/encrypted-sync-qualification-20261
 records the new evidence and handoff. Physical6600H installation is explicitly
 held by the owner; no physical disks, Nix/EFI, accounts or keys were modified.
 
-## macOS build (AWAI-3256)
+## macOS build
 
 The same app builds for macOS with Tauri. File operations use a bounded Rust adapter
 (`src-tauri/src/desktop.rs`) with the Android `DriveFiles` rules: validated, NFC-normalised
 names; paths confined to one app-private root
 (`~/Library/Application Support/network.awai.drive/drive-local-v1`); symlinks refused; at most
 1000 entries per folder; notes up to 64 KiB; saves published by an atomic no-clobber link.
-`open` hands a file to the default viewer through `/usr/bin/open`. File import and encrypted
-sync are not available on macOS yet: `pick` returns `import-unavailable`, `vaultStatus` reports
-not configured, and the other vault operations return `android-adapter-required`. This app is
-separate from the existing Swift AwaiDrive.app (`com.kotoba.awaivol.drive`).
+`open` hands a file to the default viewer through `/usr/bin/open`. File import through
+`pick` remains unavailable. With the WNFS build profile enabled, the Mac adapter uses
+the login Keychain for a bundle-scoped unlock secret and control key. The control file
+is AES-GCM authenticated and atomically replaced. Restoration keeps plaintext in a
+private staging directory until its inventory matches the authenticated snapshot.
+Publication is an exclusive rename, and an interrupted restore can retry without
+overwriting a published copy. The Mac adapter supports WNFS and local recipient keys.
+Awai OS account binding and two-device restore qualification remain tracked in AWAI-3557.
+The Apple bundle ID `network.awai.drive` has its own storage and Keychain scope.
+The Swift AwaiDrive.app (`com.kotoba.awaivol.drive`) can remain installed.
 
 ```sh
 npm ci && npm run build
