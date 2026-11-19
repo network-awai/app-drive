@@ -55,8 +55,8 @@
     "sha256": "ed8e3d96f9262b7b093a07983953273a3fc007d9fb9ceecab7e2c12cbb2a4704"
   },
   "wnfs": {
-    "repository": "https://github.com/network-awai/network-awai-apex",
-    "revision": "45b97229d459701c40eee4e1c830380bc7970981",
+    "repository": "https://github.com/network-awai/awai-fs",
+    "revision": "c9a29ce12597a3388aa4190ecd019ca31206c113",
     "files": {
       "awai/wnfs/accumulator.cljc": "c0f7a38f64f712491f6439d9b81a9af0e58c077722113eddf81f264430e4cdc3",
       "awai/wnfs/blocks.cljc": "fe65671bfe93db1832ba4483eea57d15585ee9c74ee02c36d8b542c45e27e2b0",

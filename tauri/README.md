@@ -23,7 +23,7 @@ profile with a WNFS PrivateForest and multiple CARv1 packs. It preserves the
 legacy snapshot head and owner key. Enable it for a validated HTTPS storage
 origin using `AWAI_DRIVE_WNFS_SYNC=1` and `AWAI_DRIVE_SYNC_ORIGIN`.
 Set `AWAI_DRIVE_WNFS_SOURCE` to the absolute path of an authorized
-network-awai-apex Git checkout containing the pinned revision. The build
+network-awai/awai-fs Git checkout containing the pinned revision. The build
 checks each upstream file hash. WNFS source and compiled WNFS bundles stay
 outside Git. Each
 pack stays within the existing 12 MiB transport cap. This browser profile
