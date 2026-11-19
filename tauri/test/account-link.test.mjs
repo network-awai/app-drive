@@ -7,6 +7,7 @@ import {
   DRIVE_PASSKEY_PURPOSE, LINK_ORIGIN, RP_ID, SESSION_MS, parseLinkFragment, passkeyChallenge,
   sealResponse, toBase64Url,
 } from '../dist/account-link-core.js';
+import {issueWnfsAccountProof} from '../dist/wnfs-account.js';
 import {runtimeFor} from '../src/sync-contract.js';
 import {clientRuntimeProblems} from '../vendor/platform/kotoba-client-runtime.js';
 
@@ -28,6 +29,10 @@ test('Drive saves and rechecks only the authorized device’s scoped existing-ac
     async call(op, args) {
       if (op === 'accountPrepare' || op === 'accountPublic') return {publicKey};
       if (op === 'accountRead') return stored;
+      if (op === 'accountBindWnfs') {
+        return {proof: await issueWnfsAccountProof(device, stored, 'network.awai.drive',
+          {purpose: 'bind-wnfs-key', value: args.value})};
+      }
       assert.equal(op, 'accountSave');
       stored = args.link;
       saves++;
@@ -63,6 +68,11 @@ test('Drive saves and rechecks only the authorized device’s scoped existing-ac
   const linked = await pending.finish(signal);
   assert.equal(saves, 1);
   assert.deepEqual(await account.linkedAccount(), linked);
+  const key = {id: 'kv1:' + 'a'.repeat(43)};
+  const bound = await account.bindWnfsKey(key);
+  assert.equal(bound.proof.claim.account, linked.accountDid);
+  assert.equal(bound.proof.claim.action.value, key.id);
+  await assert.rejects(account.bindWnfsKey({id: 'invalid'}), /invalid-account-action/);
   await assert.rejects(pending.finish(signal), /account-link-expired/);
   stored = {...stored, accountDid: 'did:key:zDifferent'};
   await assert.rejects(account.linkedAccount(), /invalid-account-link/);

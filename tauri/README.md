@@ -142,7 +142,11 @@ is AES-GCM authenticated and atomically replaced. Restoration keeps plaintext in
 private staging directory until its inventory matches the authenticated snapshot.
 Publication is an exclusive rename, and an interrupted restore can retry without
 overwriting a published copy. The Mac adapter supports WNFS and local recipient keys.
-Awai OS account binding and two-device restore qualification remain tracked in AWAI-3557.
+With `AWAI_DRIVE_AWAI_LINK=1`, the Mac uses the existing Awai Passkey
+link and a separate Keychain P-256 signing key. The app verifies the signature
+that binds the local WNFS recipient fingerprint to the linked account. The
+signed remote-share flow and external restore acceptance remain tracked in
+AWAI-3557 and AWAI-3401.
 The Apple bundle ID `network.awai.drive` has its own storage and Keychain scope.
 The Swift AwaiDrive.app (`com.kotoba.awaivol.drive`) can remain installed.
 

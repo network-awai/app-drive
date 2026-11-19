@@ -7,7 +7,7 @@ import {translator,messages} from './i18n.js';
 import {searchFiles,searchCatalog,fileKind} from './search.js';
 import {createDriveAccountLink} from './account-link.js';
 import {runtimeFor,accountOperation} from './sync-contract.js';
-import {accountLinkEnabled} from './sync-config.js';
+import {accountLinkEnabled, wnfsEnabled} from './sync-config.js';
 const {lang,t,bytes}=translator(navigator.language);document.documentElement.lang=lang;document.querySelectorAll('[data-i18n]').forEach(n=>n.textContent=t(n.dataset.i18n));document.querySelectorAll('[data-i18n-aria]').forEach(n=>n.setAttribute('aria-label',t(n.dataset.i18nAria)));
 import {createHost} from './host.js';
 import {clientRuntimeProblems,createClientConsentHost,createClientOperationBroker} from './runtime.js';
@@ -196,7 +196,8 @@ $('evict-allow').onclick=()=>{$('evict-confirm').close();task(async()=>{await en
 if(!encryptedSync.configured){$('sync').hidden=true;$('restore').hidden=true;$('evict').hidden=true;}
 else $('search-scope-field').hidden = false;
 
-if (accountLinkEnabled && /Android/i.test(navigator.userAgent)) {
+const macAccount = /Macintosh/i.test(navigator.userAgent);
+if (accountLinkEnabled && (macAccount || /Android/i.test(navigator.userAgent))) {
   const accountBroker = createClientOperationBroker({
     runtime: runtimeFor('', false, true),
     requestedCapabilities: [accountOperation.capability],
@@ -244,7 +245,11 @@ if (accountLinkEnabled && /Android/i.test(navigator.userAgent)) {
     $('account-receive').disabled = true;
     try {
       status(t('account.waiting'));
-      showAccount(await pending.finish(signal));
+      const linked = await pending.finish(signal);
+      if (macAccount && wnfsEnabled) {
+        await account.bindWnfsKey(await encryptedSync.publicSnapshotRecipient());
+      }
+      showAccount(linked);
     } catch (error) {
       status(t(signal.aborted || error.message === 'client operation was not approved'
         ? 'account.cancelled' : error.message === 'account-mismatch' ? 'account.mismatch' : 'account.failed'));

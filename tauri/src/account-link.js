@@ -2,6 +2,7 @@ import {
   DRIVE_PASSKEY_PURPOSE, compressP256, confirmationCode, createLinkRequest, fromBase64Url,
   linkUrl, openResponse, p256Did, verifyLink,
 } from './account-link-core.js';
+import {verifyWnfsAccountProof} from './wnfs-account.js';
 import {accountOperation} from './sync-contract.js';
 
 const maxRelayBytes = 128 * 1024;
@@ -30,6 +31,16 @@ export function createDriveAccountLink({call, approve}) {
   return {
     linkedAccount,
     linkedDevice: () => getDeviceDid('accountPublic'),
+    async bindWnfsKey(recipient) {
+      const linked = await linkedAccount();
+      if (!linked) throw Error('passkey-link-required');
+      const value = recipient?.id;
+      const {proof} = await call('accountBindWnfs', {value, expires: Date.parse(linked.expiresAt)});
+      const bound = await verifyWnfsAccountProof(proof, {purpose: 'bind-wnfs-key', value});
+      if (bound.account !== linked.accountDid || bound.app !== 'network.awai.drive' ||
+          bound.device !== await getDeviceDid('accountPublic')) throw Error('wrong-account-device');
+      return {schema: 'awai.wnfs.account-recipient.v1', publicKey: recipient, proof};
+    },
     async begin() {
       const deviceDid = await getDeviceDid('accountPrepare');
       const {request, privateKey} = await createLinkRequest(deviceDid, Date.now(), DRIVE_PASSKEY_PURPOSE);

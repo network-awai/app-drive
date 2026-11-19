@@ -187,6 +187,8 @@ fn inventory(local: &Local) -> Result<Inventory> {
 
 #[derive(Default, Deserialize, Serialize)]
 struct Control {
+    #[serde(default)]
+    account_link: Option<Value>,
     record: Option<String>,
     wnfs: Option<Value>,
     recipients: Recipients,
@@ -474,6 +476,22 @@ impl Vault {
 
     pub fn call(&mut self, local: &Local, op: &str, request: &Value) -> Result<Value> {
         match op {
+            "accountPrepare" | "accountPublic" => {
+                // A stored link cannot authorize a replacement device key.
+                let linked = match self.key(false)? {
+                    Some(key) => self.load(&key)?.account_link.is_some(),
+                    None => false,
+                };
+                let key = crate::desktop_account::device_key(
+                    &self.service,
+                    op == "accountPrepare" && !linked,
+                )?;
+                return match key {
+                    Some(key) => crate::desktop_account::public_value(&key),
+                    None if linked => Err("account-device-key-missing".into()),
+                    None => Ok(json!({})),
+                };
+            }
             "vaultWnfsInventory" => {
                 return Ok(json!({"entries":inventory(local)?.into_values().collect::<Vec<_>>()}))
             }
@@ -502,6 +520,9 @@ impl Vault {
                 return Ok(json!({}));
             }
             "vaultStatus"
+            | "accountRead"
+            | "accountSave"
+            | "accountBindWnfs"
             | "vaultSession"
             | "vaultRecord"
             | "vaultWnfsRecipients"
@@ -511,9 +532,11 @@ impl Vault {
             _ => return Err("unsupported-operation".into()),
         }
 
-        let initialize = op == "vaultSession" && request["initialize"].as_bool() == Some(true);
+        let initialize = op == "accountSave"
+            || (op == "vaultSession" && request["initialize"].as_bool() == Some(true));
         let Some(key) = self.key(initialize)? else {
             return match op {
+                "accountRead" => Ok(json!({})),
                 "vaultSession" | "vaultStatus" => {
                     Ok(json!({"initialized":false,"synced":false,"origin":"","evicted":false}))
                 }
@@ -522,6 +545,32 @@ impl Vault {
         };
         let mut state = self.load(&key)?;
         match op {
+            "accountRead" => Ok(state.account_link.unwrap_or_else(|| json!({}))),
+            "accountSave" => {
+                let device = crate::desktop_account::device_key(&self.service, false)?
+                    .ok_or("account-device-key-missing")?;
+                let link = &request["link"];
+                crate::desktop_account::validate_link(&device, link)?;
+                if state
+                    .account_link
+                    .as_ref()
+                    .is_some_and(|prior| prior["accountDid"] != link["accountDid"])
+                {
+                    return Err("account-mismatch".into());
+                }
+                state.account_link = Some(link.clone());
+                self.save(&key, &state)?;
+                Ok(json!({}))
+            }
+            "accountBindWnfs" => {
+                let device = crate::desktop_account::device_key(&self.service, false)?
+                    .ok_or("account-device-key-missing")?;
+                let link = state.account_link.as_ref().ok_or("passkey-link-required")?;
+                if state.record.is_none() {
+                    return Err("recovery-required".into());
+                }
+                crate::desktop_account::binding(&device, link, request)
+            }
             "vaultSession" => Ok(
                 json!({"initialized":true,"secret":STANDARD.encode(&key[..32]),
                 "record":state.record,"wnfs":state.wnfs}),
