@@ -155,3 +155,28 @@ npm ci && npm run build
 (cd src-tauri && cargo test --lib)
 npx tauri build --no-bundle   # binary: src-tauri/target/release/awai-drive
 ```
+
+### Restore points on macOS and Android
+
+The device and restore screens follow the
+[AWAI-3557 design](https://www.figma.com/design/umqCqP5KSjLWh9fhCI1HaN?node-id=358-237).
+Mac opens the fixed Awai Passkey site after the account relay request is
+approved and ready to receive a response. Android requests the device-key
+proof from a compatible, same-publisher Awai Home. Drive verifies the signed
+proof before showing the account and key as verified.
+
+In Files, open Cloud Restore and select the locally saved head or paste a
+recipient-specific v1 grant. Two recipients can use different grants for the
+same snapshot basis. Downloads use separate broker approvals, with the HTTP
+cache disabled by the canonical broker. After interruption, choose Resume to
+fetch and verify the snapshot again. The app stores only the pending restore
+reference. A successful restore is published as a new folder. The displayed
+elapsed time includes approval dialogs.
+
+The configured pack endpoint must allow the exact WebView origin
+(`tauri://localhost` on macOS, `http://tauri.localhost` on Android).
+The v1 grant flow uses direct delivery from a known sender. Account-scoped
+head discovery and storage-backed current authorization still require the
+published authority. In the absence of that authority, a failed restore
+shows a generic error. The design's revocation message requires a verified
+revocation decision.

@@ -49,7 +49,8 @@ export function createDriveAccountLink({call, approve}) {
       return {
         code: confirmationCode(request),
         url: linkUrl(request),
-        async finish(signal) {
+        expiresAt: Date.parse(request.exp),
+        async finish(signal, onReady) {
           if (used || !/^[a-f0-9]{32}$/.test(request.topic) || Date.parse(request.exp) <= Date.now()) {
             throw Error('account-link-expired');
           }
@@ -60,6 +61,7 @@ export function createDriveAccountLink({call, approve}) {
           const reader = reply.body.getReader();
           const decoder = new TextDecoder('utf-8', {fatal: true});
           try {
+            await onReady?.();
             let buffer = '', received = 0;
             for (;;) {
               const {value, done} = await reader.read();

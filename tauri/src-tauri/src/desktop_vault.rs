@@ -671,7 +671,7 @@ impl Vault {
                 }
                 state.wnfs = Some(
                     json!({"schema":"awai.drive.wnfs.v1","root":root,"capsule":capsule,
-                    "packs":packs,"origin":origin,"entries":request["entries"]}),
+                    "packs":packs,"origin":origin,"entries":request["entries"],"basis":request["basis"]}),
                 );
                 self.save(&key, &state)?;
                 Ok(json!({}))

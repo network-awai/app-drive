@@ -179,7 +179,19 @@ test('Drive only commits WNFS after all readbacks, and restores into a staged co
   assert.equal(committed.packs.length, 2);
   const head = { ...committed, schema: 'awai.drive.wnfs.v1' };
   const count = nativeOps.length;
-  assert.deepEqual(await sync.restore({ wnfs: head }), { folder: 'Recovered test' });
+  requests.length = 0;
+  const abort = new AbortController();
+  await assert.rejects(sync.restore({ wnfs: head }, {
+    signal: abort.signal,
+    progress(event) { if (event.bytes > 0) abort.abort(); },
+  }), { name: 'AbortError' });
+  assert.deepEqual(requests, ['download']);
+  assert.deepEqual(nativeOps.slice(count), []);
+  const phases = [];
+  assert.deepEqual(await sync.restore({ wnfs: head }, {
+    progress({ phase }) { if (phases.at(-1) !== phase) phases.push(phase); },
+  }), { folder: 'Recovered test' });
+  assert.deepEqual(phases, ['fetch', 'verify', 'publish']);
   assert.deepEqual(nativeOps.slice(count), ['vaultWnfsRestoreBegin', 'vaultWnfsRestoreWrite', 'vaultWnfsRestorePublish']);
 });
 

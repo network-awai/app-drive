@@ -241,3 +241,88 @@ main details { margin-block-start: 1rem; color: var(--awai-muted); }
 .drive-nav a[aria-current] { color: var(--awai-primary); background: var(--awai-container); }
 .drive-shell #files .awai-button[data-kind="image"],
 .drive-shell #files .awai-button[data-kind="video"] { padding-inline-start: 4rem; }
+
+/* Drive · 端末連携と復元. Native title bars and the status bar stay platform-owned. */
+html.awai-ui body[data-flow]:not([data-flow=""]) { background: var(--awai-background); }
+body[data-flow]:not([data-flow=""]) .drive-shell main > :not(header, #device-panel, #cloud-restore),
+body[data-flow]:not([data-flow=""]) #device-panel > :not(#drive-account),
+body[data-flow]:not([data-flow=""]) .drive-shell header > :not(h1),
+body[data-flow="restore"] #device-panel { display: none; }
+body:not([data-flow="account"]) #drive-account,
+body:not([data-flow="restore"]) #cloud-restore,
+.drive-flow[hidden], .drive-flow [hidden] { display: none; }
+.drive-flow {
+  max-inline-size: 31.25rem;
+  min-block-size: min(33rem, 75dvh);
+  display: flex;
+  flex-direction: column;
+  line-height: 1.48;
+  overflow-wrap: anywhere;
+  color: var(--awai-text);
+}
+.drive-flow h2 { margin: 0; font-size: clamp(1.5625rem, 4vw, 1.75rem); font-weight: 700; }
+.flow-intro { color: var(--awai-muted); font-size: .8125rem; margin: .45rem 0 1.5rem; }
+.flow-note { color: var(--awai-muted); font-size: .75rem; }
+.flow-card {
+  border: 1px solid var(--awai-border);
+  border-radius: .875rem;
+  padding: .875rem 1rem;
+  background: var(--awai-surface);
+  font-size: .8125rem;
+}
+.flow-card[data-tone="ok"] { background: var(--awai-success-container, #e8f5ef); color: var(--awai-on-success-container, #086152); }
+.flow-card[data-tone="warn"] { background: var(--awai-warning-container, #fff1e5); color: var(--awai-on-warning-container, #784528); }
+.flow-card[data-tone="error"] { background: var(--awai-error-container, #fcecee); color: var(--awai-on-error-container, #942e39); }
+.flow-card dl { margin: .5rem 0 0; }
+.flow-card dt { color: var(--awai-muted); font-weight: 700; font-size: .6875rem; }
+.flow-card dd { margin: .125rem 0 .55rem; }
+.flow-card dd:last-child { margin-block-end: 0; }
+.account-code-card { display: grid; grid-template-columns: 1fr auto; align-items: end; }
+.account-code-card strong { grid-column: 1 / -1; }
+#account-code { font-size: 2rem; font-weight: 700; }
+#account-expiration { color: var(--awai-muted); }
+#account-status:empty { display: none; }
+.flow-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-block-start: auto; padding-block-start: 1.5rem; }
+.drive-flow .flow-actions button { min-block-size: 48px; border-radius: .75rem; }
+@media (max-width: 37.5rem) {
+  .drive-flow { min-block-size: min(34rem, calc(100dvh - 10rem)); padding-inline: .25rem; }
+  .flow-actions { flex-direction: column; align-items: stretch; }
+}
+@media (min-width: 38rem) {
+  [data-platform="mac"] body[data-flow]:not([data-flow=""]) .drive-shell {
+    display: grid; grid-template-columns: 11.25rem minmax(0, 1fr); min-block-size: 100dvh; max-inline-size: none;
+  }
+  [data-platform="mac"] body[data-flow]:not([data-flow=""]) .drive-nav {
+    position: static; display: flex; flex-direction: column; align-items: stretch; justify-content: start;
+    flex-wrap: nowrap; gap: .4rem; padding: 1.25rem .75rem; border: 0; background: var(--awai-container);
+  }
+  [data-platform="mac"] body[data-flow]:not([data-flow=""]) .drive-nav::before {
+    content: 'Awai Drive'; font-weight: 700; padding: .25rem .5rem .85rem;
+  }
+  [data-platform="mac"] body[data-flow]:not([data-flow=""]) .drive-nav a {
+    text-align: start; min-block-size: 34px; padding: .45rem .65rem; border-radius: .5625rem;
+  }
+  [data-platform="mac"] body[data-flow]:not([data-flow=""]) .drive-nav img { display: none; }
+  [data-platform="mac"] body[data-flow]:not([data-flow=""]) main {
+    inline-size: 100%; padding: 1.25rem clamp(1.5rem, 5vw, 2.75rem) 1.5rem;
+  }
+  [data-platform="mac"] body[data-flow="account"] main h1 { font-size: .75rem; }
+  [data-platform="mac"] body[data-flow]:not([data-flow=""]) .drive-flow { min-block-size: calc(100dvh - 6rem); }
+}
+.restore-point { display: flex; gap: .75rem; align-items: start; }
+.restore-point img { box-sizing: content-box; padding: .4375rem; border-radius: .625rem; background: var(--awai-container); }
+.restore-point p { margin: .3rem 0 0; }
+#restore-progress { margin-block-start: .8rem; }
+#restore-progress progress { display: block; inline-size: 100%; accent-color: var(--awai-primary); }
+.restore-stages { margin-block: .65rem 0; padding-inline-start: 1.3rem; }
+.restore-stages li { border: 0; color: var(--awai-muted); padding: .125rem 0; }
+.restore-stages [aria-current="step"] { color: var(--awai-text); font-weight: 700; }
+#restore-import textarea { border-radius: .75rem; border: 1px solid var(--awai-border); }
+.kotoba-client-consent {
+  max-inline-size: min(94vw, 31.25rem); padding: 1.25rem; border-color: var(--awai-border);
+  color: var(--awai-text); background: var(--awai-surface); line-height: 1.48;
+}
+.kotoba-client-consent h2 { margin-block-start: 0; }
+.kotoba-client-consent pre { padding: .75rem; border-radius: .75rem; background: var(--awai-background); }
+.kotoba-client-consent button { border-radius: .75rem; margin-inline-end: .5rem; }
+.kotoba-client-consent button:first-of-type { color: var(--awai-text); background: var(--awai-container); }

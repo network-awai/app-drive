@@ -65,7 +65,11 @@ test('Drive saves and rechecks only the authorized device’s scoped existing-ac
   assert.match(pending.code, /^[A-F0-9]{3}-[A-F0-9]{3}$/);
   assert.equal(reads, 0);
   assert.equal(await account.linkedAccount(), null);
-  const linked = await pending.finish(signal);
+  assert.equal(pending.expiresAt, Date.parse(request.exp));
+  const linked = await pending.finish(signal, () => {
+    assert.equal(reads, 1);
+    assert.equal(saves, 0);
+  });
   assert.equal(saves, 1);
   assert.deepEqual(await account.linkedAccount(), linked);
   const key = {id: 'kv1:' + 'a'.repeat(43)};
@@ -80,6 +84,6 @@ test('Drive saves and rechecks only the authorized device’s scoped existing-ac
   const next = await account.begin();
   request = parseLinkFragment(new URL(next.url).hash);
   deny = true;
-  await assert.rejects(next.finish(signal), /not approved/);
+  await assert.rejects(next.finish(signal, () => assert.fail('A denied relay never opens the browser')), /not approved/);
   assert.equal(saves, 1);
 });
