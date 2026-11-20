@@ -34,6 +34,7 @@ try {
   page.setDefaultTimeout(10000);
   stage='account status';
   const status=page.locator('#account-status');
+  await status.waitFor({state:'visible'});
   const authorized=await status.isVisible() && /認可済み|Device authorized/i.test(await status.textContent());
   if(action==='probe'){
     console.log(JSON.stringify({authorized,restoreUI:await page.locator('#restore-form').count()===1}));
@@ -41,7 +42,8 @@ try {
     assert(authorized,'Link the dedicated QA identity first');
     if(action==='recipient'){
       stage='show public recipient';
-      await page.getByText(/^(Snapshot sharing|スナップショットの共有)$/).click();
+      const sharing=page.getByText(/^(Snapshot sharing|スナップショットの共有)$/);
+      if(!await sharing.evaluate(node=>node.closest('details').open))await sharing.click();
       await page.getByRole('button',{name:/^(Show my public key|受信者情報を表示)$/}).click();
       const field=page.getByRole('textbox',{name:/^(Sharing output|共有の出力)$/});
       await page.waitForFunction(()=>[...document.querySelectorAll('textarea[readonly]')].some(node=>node.value.startsWith('{')));
