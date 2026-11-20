@@ -21,6 +21,7 @@ function matches(needle, kind, item) {
   const name = searchKey(item.name);
   if (!name.includes(needle)) return false;
   if (kind === 'all') return true;
+  if (kind === 'pdf') return !item.directory && name.endsWith('.pdf');
   return fileKind(item) === kind;
 }
 

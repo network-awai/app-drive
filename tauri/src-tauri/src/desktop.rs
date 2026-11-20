@@ -6,7 +6,7 @@
 //! is not an AwaiFS codec, CID or crypto implementation and has no network authority.
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 
@@ -57,6 +57,33 @@ pub(crate) fn available(p: &Path) -> Option<u64> {
         return None;
     }
     Some(s.f_bavail as u64 * s.f_frsize as u64)
+}
+
+fn modified(meta: &fs::Metadata) -> u64 {
+    meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis().min(u64::MAX as u128) as u64).unwrap_or(0)
+}
+
+pub(crate) fn rename_exclusive(from: &Path, to: &Path) -> Result<(), String> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let from = CString::new(from.as_os_str().as_bytes()).map_err(|_| "invalid-path")?;
+    let to = CString::new(to.as_os_str().as_bytes()).map_err(|_| "invalid-path")?;
+    // RENAME_EXCL enforces no-overwrite in the same atomic filesystem operation.
+    if unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) } == 0 {
+        Ok(())
+    } else {
+        Err(io(std::io::Error::last_os_error()))
+    }
+}
+
+fn relocate(from: &Path, to: &Path) -> Result<(), String> {
+    rename_exclusive(from, to)?;
+    if let Some(dir) = from.parent() { sync_dir(dir)?; }
+    if to.parent() != from.parent() {
+        if let Some(dir) = to.parent() { sync_dir(dir)?; }
+    }
+    Ok(())
 }
 
 impl Local {
@@ -116,7 +143,7 @@ impl Local {
             if meta.file_type().is_symlink() {
                 return Err("invalid-path".into());
             }
-            rows.push((meta.is_dir(), file_name, entry.path(), meta.len()));
+            rows.push((meta.is_dir(), file_name, entry.path(), meta.len(), modified(&meta)));
             if rows.len() > MAX_ENTRIES {
                 return Err("entry-limit".into());
             }
@@ -124,9 +151,9 @@ impl Local {
         rows.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         Ok(rows
             .into_iter()
-            .map(|(directory, name, path, bytes)| {
+            .map(|(directory, name, path, bytes, modified)| {
                 serde_json::json!({"name": name, "path": self.path(&path), "directory": directory,
-                    "bytes": if directory { 0 } else { bytes }, "local": true, "remoteVerified": false})
+                    "bytes": if directory { 0 } else { bytes }, "modified": modified, "local": true, "remoteVerified": false})
             })
             .collect())
     }
@@ -177,6 +204,142 @@ impl Local {
         Ok(format!("{:x}", Sha256::digest(bytes)))
     }
 
+    pub fn move_entry(&self, path: &str, destination: &str, n: &str) -> Result<String, String> {
+        if path.is_empty() { return Err("invalid-path".into()); }
+        let source = self.resolve(path)?;
+        if !source.exists() { return Err("invalid-path".into()); }
+        let (dir, target) = self.child(destination, n)?;
+        if dir.starts_with(&source) { return Err("invalid-path".into()); }
+        if source != target {
+            if source.parent() != Some(dir.as_path()) && self.list(destination)?.len() >= MAX_ENTRIES {
+                return Err("entry-limit".into());
+            }
+            relocate(&source, &target)?;
+        }
+        Ok(self.path(&target))
+    }
+
+    fn trash_root(&self) -> Result<PathBuf, String> {
+        let root = self.root.parent().ok_or("invalid-path")?.join("drive-trash-v1");
+        match fs::create_dir(&root) {
+            Ok(()) => sync_dir(root.parent().ok_or("invalid-path")?)?,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {},
+            Err(e) => return Err(io(e)),
+        }
+        if !root.is_dir() || is_symlink(&root) { return Err("invalid-path".into()); }
+        Ok(root)
+    }
+
+    pub fn trash(&self, path: &str) -> Result<String, String> {
+        if path.is_empty() { return Err("invalid-path".into()); }
+        let from = self.resolve(path)?;
+        let root = self.trash_root()?;
+        if fs::read_dir(&root).map_err(io)?.take(MAX_ENTRIES).count() >= MAX_ENTRIES {
+            return Err("entry-limit".into());
+        }
+        let id = format!("{:x}-{:x}", std::process::id(), std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).map_err(|_| "storage-unavailable")?.as_nanos());
+        let slot = root.join(&id);
+        fs::create_dir(&slot).map_err(io)?;
+        let result = (|| {
+            let mut record = fs::OpenOptions::new().write(true).create_new(true).open(slot.join("original")).map_err(io)?;
+            record.write_all(self.path(&from).as_bytes()).map_err(io)?;
+            record.sync_all().map_err(io)?;
+            sync_dir(&slot)?;
+            sync_dir(&root)?;
+            relocate(&from, &slot.join("item"))
+        })();
+        if result.is_err() && !slot.join("item").exists() {
+            let _ = fs::remove_file(slot.join("original"));
+            let _ = fs::remove_dir(&slot);
+        }
+        result?;
+        Ok(id)
+    }
+
+    fn trash_slot(&self, id: &str) -> Result<PathBuf, String> {
+        if id.is_empty() || id.len() > 64 || !id.bytes().all(|c| c.is_ascii_hexdigit() || c == b'-') {
+            return Err("invalid-path".into());
+        }
+        let slot = self.trash_root()?.join(id);
+        if !slot.is_dir() || [&slot, &slot.join("item"), &slot.join("original")].iter().any(|p| is_symlink(p)) {
+            return Err("invalid-path".into());
+        }
+        Ok(slot)
+    }
+
+    fn original(slot: &Path) -> Result<String, String> {
+        let mut path = String::new();
+        fs::File::open(slot.join("original")).map_err(io)?.take(8193).read_to_string(&mut path).map_err(io)?;
+        if path.is_empty() || path.len() > 8192 { return Err("invalid-path".into()); }
+        Ok(path)
+    }
+
+    pub fn trash_list(&self) -> Result<Vec<serde_json::Value>, String> {
+        let mut rows = Vec::new();
+        for slot in fs::read_dir(self.trash_root()?).map_err(io)? {
+            let slot = slot.map_err(io)?;
+            let id = slot.file_name().into_string().map_err(|_| "invalid-path")?;
+            let slot = self.trash_slot(&id)?;
+            let item = slot.join("item");
+            if !item.exists() { continue; }
+            let path = Self::original(&slot)?;
+            let meta = fs::symlink_metadata(item).map_err(io)?;
+            rows.push(serde_json::json!({"name": path.rsplit('/').next(), "path": id, "directory": meta.is_dir(),
+                "modified": modified(&meta), "bytes": if meta.is_dir() { 0 } else { meta.len() }}));
+            if rows.len() > MAX_ENTRIES { return Err("entry-limit".into()); }
+        }
+        Ok(rows)
+    }
+
+    pub fn recover(&self, id: &str) -> Result<(), String> {
+        let slot = self.trash_slot(id)?;
+        let path = Self::original(&slot)?;
+        let (parent, name) = path.rsplit_once('/').unwrap_or(("", &path));
+        if self.list(parent)?.len() >= MAX_ENTRIES { return Err("entry-limit".into()); }
+        let (_, to) = self.child(parent, name)?;
+        relocate(&slot.join("item"), &to)?;
+        let _ = fs::remove_file(slot.join("original"));
+        let _ = fs::remove_dir(&slot);
+        Ok(())
+    }
+
+    pub fn import_file(&self, parent: &str, source: &Path) -> Result<(), String> {
+        use std::os::unix::fs::OpenOptionsExt;
+        const MAX_BYTES: u64 = 1024 * 1024 * 1024;
+        let filename = source.file_name().and_then(|name| name.to_str()).ok_or("invalid-name")?;
+        let (dir, destination) = self.child(parent, filename)?;
+        if self.list(parent)?.len() >= MAX_ENTRIES { return Err("entry-limit".into()); }
+        if fs::symlink_metadata(&destination).is_ok() { return Err("file-exists".into()); }
+        let input = fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(source).map_err(io)?;
+        let meta = input.metadata().map_err(io)?;
+        if !meta.is_file() { return Err("invalid-path".into()); }
+        let length = meta.len();
+        if length > MAX_BYTES { return Err("file-too-large".into()); }
+        if available(&dir).map_or(false, |space| space < length + RESERVE) { return Err("storage-full".into()); }
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| "storage-unavailable")?.as_nanos();
+        let pending = dir.join(format!(".pending-import-{}-{stamp}", std::process::id()));
+        let mut output = fs::OpenOptions::new().write(true).create_new(true).open(&pending).map_err(io)?;
+        let result = (|| {
+            let written = std::io::copy(&mut input.take(length + 1), &mut output).map_err(io)?;
+            if written != length { return Err("source-size-changed".into()); }
+            output.sync_all().map_err(io)?;
+            rename_exclusive(&pending, &destination)?;
+            sync_dir(&dir)
+        })();
+        if result.is_err() { let _ = fs::remove_file(&pending); }
+        result
+    }
+
+    pub fn preview_text(&self, path: &str) -> Result<String, String> {
+        let f = self.file(path)?;
+        let mut bytes = Vec::new();
+        fs::File::open(f).map_err(io)?.take(65_536).read_to_end(&mut bytes).map_err(io)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
     pub fn file(&self, rel: &str) -> Result<PathBuf, String> {
         let f = self.resolve(rel)?;
         if !f.is_file() {
@@ -192,7 +355,41 @@ mod tests {
     fn temp() -> Local {
         let d = std::env::temp_dir().join(format!("awai-drive-test-{}-{}", std::process::id(),
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-        Local::new(d).unwrap()
+        Local::new(d.join("drive-local-v1")).unwrap()
+    }
+
+    #[test]
+    fn imports_a_local_file_once_without_overwrite() {
+        let l = temp();
+        let outside = l.root.parent().unwrap().join("import.bin");
+        fs::write(&outside, &[0, 1, 2, 255]).unwrap();
+        l.import_file("", &outside).unwrap();
+        assert_eq!(fs::read(l.file("import.bin").unwrap()).unwrap(), [0, 1, 2, 255]);
+        assert_eq!(l.import_file("", &outside).unwrap_err(), "file-exists");
+        assert_eq!(fs::read(&outside).unwrap(), [0, 1, 2, 255]);
+    }
+
+    #[test]
+    fn organizes_without_overwrite_and_recovers_from_trash() {
+        let l = temp();
+        l.mkdir("", "folder").unwrap();
+        l.create_text("", "file.txt", "first").unwrap();
+        l.create_text("folder", "file.txt", "second").unwrap();
+        assert_eq!(l.move_entry("file.txt", "folder", "file.txt").unwrap_err(), "file-exists");
+        assert_eq!(l.preview_text("file.txt").unwrap(), "first");
+        assert_eq!(l.preview_text("folder/file.txt").unwrap(), "second");
+        assert!(l.move_entry("folder", "folder", "nested").is_err());
+        assert_eq!(l.move_entry("file.txt", "folder", "moved.txt").unwrap(), "folder/moved.txt");
+        let id = l.trash("folder/moved.txt").unwrap();
+        assert_eq!(l.trash_list().unwrap()[0]["path"], id);
+        assert_eq!(l.list("folder").unwrap().len(), 1);
+        l.create_text("folder", "moved.txt", "conflict").unwrap();
+        assert_eq!(l.recover(&id).unwrap_err(), "file-exists");
+        assert_eq!(l.preview_text("folder/moved.txt").unwrap(), "conflict");
+        l.move_entry("folder/moved.txt", "folder", "different.txt").unwrap();
+        l.recover(&id).unwrap();
+        assert_eq!(l.preview_text("folder/moved.txt").unwrap(), "first");
+        assert!(l.trash_list().unwrap().is_empty());
     }
 
     #[test]
