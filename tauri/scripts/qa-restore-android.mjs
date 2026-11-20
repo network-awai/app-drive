@@ -3,15 +3,19 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { fixturePackInPrompt } from "./qa-pack-consent.mjs";
 
-const [serial, action, directory] = process.argv.slice(2);
+const args = process.argv.slice(2);
+const broker = args[0] === '--broker';
+const [serial, action, directory] = broker ? args.slice(1) : args;
 assert(/^[a-zA-Z0-9._:-]+$/.test(serial ?? '') &&
-  ((action === 'probe' && process.argv.length === 4) ||
-   (['recipient','restore'].includes(action) && process.argv.length === 5)),
-  'Usage: qa-restore-android.mjs ADB_SERIAL probe|recipient OUTPUT_FILE|restore FIXTURE_DIRECTORY');
-const packageName = 'network.awai.drive.passkey3099';
+  ((['probe', ...(broker ? ['authorize'] : [])].includes(action) && directory === undefined) ||
+   (['recipient','restore'].includes(action) && directory && args.length === (broker ? 4 : 3))),
+  'Usage: qa-restore-android.mjs [--broker] ADB_SERIAL probe|authorize|recipient OUTPUT_FILE|restore FIXTURE_DIRECTORY');
+const packageName = broker ? 'network.awai.drive.passkeyqa.android' : 'network.awai.drive.passkey3099';
+const homePackage = 'network.awai.home.passkeyqa';
 const source = process.env.AWAI_QA_PLAYWRIGHT;
 assert(source?.startsWith('/'),'Set AWAI_QA_PLAYWRIGHT to the absolute playwright/index.mjs path');
 const {chromium} = await import(pathToFileURL(source).href);
@@ -33,11 +37,45 @@ try {
   assert(page,'Drive QA WebView is unavailable');
   page.setDefaultTimeout(10000);
   stage='account status';
-  const status=page.locator('#account-status');
+  const status=broker ? page.locator('#account-key') : page.locator('#account-status');
+  const authorizedLabel=broker ? /署名を確認済み|Signature verified/i : /認可済み|Device authorized/i;
   await status.waitFor({state:'visible'});
-  const authorized=await status.isVisible() && /認可済み|Device authorized/i.test(await status.textContent());
+  const authorized=authorizedLabel.test(await status.textContent());
   if(action==='probe'){
     console.log(JSON.stringify({authorized,restoreUI:await page.locator('#restore-form').count()===1}));
+  }else if(action==='authorize'){
+    assert(!authorized,'Start with an unregistered QA Drive');
+    const component=homePackage+'/network.awai.home.AccountBrokerActivity';
+    assert(adb('shell','cmd','package','resolve-activity','--brief','-n',component).includes(component),
+      'The isolated Awai Home broker is not installed');
+    stage='request native account proof';
+    await page.locator('#account-begin').click({noWaitAfter:true});
+    stage='approve isolated Home native dialog';
+    const deadline=Date.now()+20000;
+    let clicked=false;
+    while(Date.now()<deadline){
+      let hierarchy='';
+      try{hierarchy=adb('exec-out','uiautomator','dump','/dev/tty');}catch{/* screen still transitioning */}
+      const nodes=hierarchy.match(/<node\s[^>]+>/g)??[];
+      const isHome=node=>node.includes('package="'+homePackage+'"');
+      const scoped=nodes.some(node=>isHome(node)&&node.includes('Drive Passkey QA')&&/kv1:[A-Za-z0-9_-]{43}/.test(node));
+      const button=nodes.find(node=>isHome(node)&&node.includes('resource-id="android:id/button1"')&&node.includes('text="承認"'));
+      const bounds=button?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
+      if(scoped&&bounds){
+        const [left,top,right,bottom]=bounds.slice(1).map(Number);
+        assert(right>left&&bottom>top);
+        assert(adb('shell','dumpsys','activity','activities').split('\n').some(line=>
+          /(?:topResumedActivity|mResumedActivity)/.test(line)&&line.includes(component)));
+        adb('shell','input','tap',String(Math.round((left+right)/2)),String(Math.round((top+bottom)/2)));
+        clicked=true;
+        break;
+      }
+      await delay(300);
+    }
+    assert(clicked,'The scoped Awai Home QA approval dialog did not appear');
+    stage='validate broker signature in Drive';
+    await status.filter({hasText:authorizedLabel}).waitFor({timeout:20000});
+    console.log('Drive verified the native Awai Home QA account proof.');
   }else{
     assert(authorized,'Link the dedicated QA identity first');
     if(action==='recipient'){
