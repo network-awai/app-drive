@@ -75,3 +75,23 @@ variable unset to test the deployed bundle.
 This covers QA authentication. The production account, authoritative
 latest-head discovery, and cross-device synchronization require separate
 acceptance.
+
+### macOS and Android restore QA
+
+Generate an isolated macOS checkout with
+`node scripts/prepare-passkey-qa.mjs --macos NEW_OUTPUT_DIRECTORY`. Build the
+normal app from that checkout with the same WNFS and account-link settings.
+The QA bundle ID is `network.awai.drive.passkeyqa.macos`. Its app data and
+Keychain service are scoped by that identifier.
+
+After linking the isolated apps with a test Passkey and test device keys,
+export each QA app's public recipient information. Run
+`node scripts/qa-restore-fixture.mjs [--publish] DIST NEW_OUTPUT MAC_PUBLIC_KEY ANDROID_PUBLIC_KEY`
+with the digest-pinned Drive build output. The fixture program writes two
+synthetic files in one encrypted snapshot, encrypted CAR objects, a grant per
+recipient, and a manifest of expected file hashes. Keep the two native QA
+receivers' caches cold. The explicit `--publish` option uploads only the synthetic
+encrypted packs to Yataverse and checks the product's pinned receipts and HTTPS
+readback. The receivers then use the product's normal account, consent, and restore
+flow with their respective grants. This script never changes account state or
+imports private keys.
