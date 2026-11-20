@@ -124,7 +124,7 @@ try {
       await page.locator('#restore-primary').click();
       const done=page.locator('#restore-primary').filter({hasText:/復元したフォルダを開く|Open the restored folder/});
       const dialog=page.locator('dialog[open]');
-      const allow=dialog.getByRole('button',{name:'Allow once',exact:true});
+      const allow=dialog.getByRole('button',{name:'Allow once',exact:true}).and(dialog.locator('button:enabled'));
       const approvals=new Set();
       for(let i=0;i<=ids.size;i++){
         await done.or(allow).first().waitFor({timeout:30000});
@@ -133,8 +133,16 @@ try {
         const prompt=await dialog.textContent();
         const approved=fixturePackInPrompt(prompt,ids);
         assert(approved&&!approvals.has(approved),'Unexpected storage consent request');
+        await allow.scrollIntoViewIfNeeded();
+        const button=await allow.boundingBox();
+        assert(button,'The armed QA consent button is outside the visible WebView');
+        assert.equal(fixturePackInPrompt(await dialog.textContent(),ids),approved);
+        const touchPoints=[{x:button.x+button.width/2,y:button.y+button.height/2}];
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints});
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+        await page.waitForFunction(id=>![...document.querySelectorAll('dialog[open] pre')].some(node=>
+          node.textContent.split('\n').includes('Action: GET /awai-drive/v1/packs/'+id)),approved);
         approvals.add(approved);
-        await allow.click();
       }
       assert(await done.isVisible());
       assert.equal(approvals.size,ids.size,'Missing pack consent');
