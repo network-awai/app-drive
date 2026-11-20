@@ -1,0 +1,174 @@
+/* Awai Drive workspace surfaces and motion match the editable desktop and Android canvas. */
+.drive-shell {
+  --drive-paper: #f8f5ec;
+  --drive-rail: #26342f;
+  --drive-rail-text: #e9eee5;
+  --drive-hover: #f1eee7;
+  --drive-pressed: #e7e0d2;
+  --drive-panel: #efeADF;
+  --drive-clay: #a94630;
+  --drive-surface: #fff;
+  --drive-ink: #253029;
+  --drive-focus: var(--awai-primary, #1e50a2);
+  --drive-line: #d9dee7;
+  background: var(--drive-paper);
+  color: var(--drive-ink);
+  min-block-size: 100dvh;
+  margin: 0;
+  padding: 0;
+  max-inline-size: none;
+}
+.drive-shell main { display: block; max-inline-size: none; inline-size: 100%; padding: 1.25rem; }
+.drive-shell .drive-nav {
+  background: var(--drive-rail); color: var(--drive-rail-text); border: 0;
+  border-radius: 0; display: flex; gap: .25rem; box-shadow: none; z-index: 4;
+}
+.drive-shell .drive-nav a { color: inherit; text-align: start; border-radius: .5rem; }
+.drive-shell .drive-nav a[aria-current] { background: #34463e; color: #fff; box-shadow: inset 3px 0 #e8a183; font-weight: 700; }
+.drive-shell .workspace-brand { display: flex; align-items: center; gap: .7rem; font-size: 1.25rem; font-weight: 700; white-space: nowrap; }
+.workspace-brand-mark { display: grid; place-items: center; background: #f4e8da; inline-size: 40px; block-size: 40px; border-radius: .55rem; }
+.drive-shell .workspace-brand img { width: 20px; height: 20px; filter: none; }
+.drive-nav footer { color: #b5c5b9; font-size: .75rem; margin-block-start: auto; padding: 1rem .3rem .35rem; border-block-start: 1px solid #52645a; }
+.drive-shell .workspace-add { display: inline-flex; align-items: center; justify-content: flex-start; gap: .5rem; background: var(--drive-clay); color: #fff; border: 0; border-radius: .5rem; min-block-size: 48px; padding: .6rem .9rem; }
+.workspace-add img { inline-size: 20px; block-size: 20px; }
+.drive-shell .workspace-add-mobile { display: none; }
+.workspace-header { display: flex; align-items: center; justify-content: space-between; gap: .8rem; margin-block-end: .85rem; }
+.workspace-label { color: var(--drive-clay); font-size: .75rem; font-weight: 700; margin: 0 0 .25rem; }
+.workspace-header h1 { margin: 0; font-size: clamp(1.55rem, 3vw, 1.875rem); line-height: 1.3; }
+.drive-shell .drive-settings { position: static; background: var(--drive-surface); border-radius: .5rem; display: grid; place-content: center; min-block-size: 48px; padding: .3rem .65rem; width: auto; color: var(--drive-ink); text-decoration: none; font-size: .75rem; font-weight: 700; }
+.drive-search-controls { display: flex; gap: .4rem; flex-wrap: wrap; }
+.drive-search-controls .search-input { flex: 1 1 14rem; max-inline-size: 30rem; background: var(--drive-surface); border-radius: .5rem; }
+.drive-search-controls .search-input img { filter: none; }
+.workspace-filters, .workspace-listbar, .workspace-view-controls, #workspace-selection { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; }
+.workspace-filters { margin: .85rem 0; }
+.workspace-filters [hidden], #workspace-selection[hidden], .drive-shell [hidden] { display: none; }
+.workspace-body { display: grid; grid-template-columns: minmax(0, 1fr) 13.7rem; align-items: start; gap: 1rem; }
+.workspace-list { min-inline-size: 0; }
+.workspace-nav-compact { display: none; }
+.workspace-nav-compact a { color: inherit; font-size: .75rem; padding: .45rem; }
+.workspace-listbar { justify-content: space-between; border-block: 1px solid var(--drive-line); padding-block: .4rem; }
+.workspace-view-controls { margin-inline-start: auto; }
+.workspace-listbar nav { display: inline-flex; align-items: center; gap: .35rem; min-inline-size: 0; overflow-wrap: anywhere; }
+.workspace-listbar #path { font-size: .8rem; min-inline-size: 0; }
+.drive-shell .workspace-filters select, .drive-shell .workspace-listbar :is(select, button), #workspace-selection button {
+  background: var(--drive-surface); border: 0; border-radius: .45rem; color: var(--drive-ink);
+  font: 700 .75rem "Noto Sans JP", sans-serif; min-block-size: 36px; padding: .4rem .65rem;
+}
+.workspace-columns, .workspace-table .workspace-item {
+  display: grid; grid-template-columns: minmax(7.5rem, 1fr) minmax(4.4rem, 7.1rem) minmax(4.4rem, 5.5rem) minmax(4.1rem, 6.3rem) 2.8rem; align-items: center; gap: .25rem;
+}
+.workspace-columns { padding: .65rem .85rem .4rem; font-size: .69rem; font-weight: 700; color: var(--awai-muted, #496078); }
+.drive-shell .workspace-table #files { margin: 0; padding: 0; list-style: none; }
+.drive-shell .workspace-table .workspace-item { border: 0; border-radius: .45rem; background: var(--drive-surface); padding: .1rem .35rem .1rem .75rem; margin-block: .28rem; min-block-size: 52px; }
+.drive-shell #files .workspace-item[data-selected] { background: var(--awai-container, #dce7ff); }
+.drive-shell #files .workspace-item[data-drop] { box-shadow: inset 0 0 0 2px #347353; }
+.drive-shell #files .workspace-item .workspace-file, .drive-shell #files .workspace-item .workspace-more {
+  display: flex; align-items: center; width: 100%; min-width: 0; min-block-size: 44px;
+  border: 0; border-radius: .35rem; padding: 0; background: transparent; color: var(--drive-ink); font-size: .84rem; text-align: start;
+}
+.drive-shell #files .workspace-item button::before, .drive-shell #files .workspace-item button:has(span)::after { display: none; }
+.workspace-file img { width: 20px; height: 20px; margin-inline-end: .6rem; flex: none; }
+.drive-shell #files .workspace-more { justify-content: center; }
+.workspace-more img { width: 20px; height: 20px; }
+.workspace-file span, .workspace-meta { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-meta { font-size: .69rem; color: var(--awai-muted, #496078); }
+.workspace-table[data-layout="grid"] .workspace-columns { display: none; }
+.workspace-table[data-layout="grid"] #files { display: grid; grid-template-columns: repeat(auto-fill,minmax(10rem,1fr)); gap: .65rem; }
+.drive-shell .workspace-table[data-layout="grid"] .workspace-item { position: relative; display: block; padding: .6rem; margin: 0; }
+.drive-shell .workspace-table[data-layout="grid"] .workspace-file { display: grid; grid-template-rows: 4.8rem auto; }
+.workspace-table[data-layout="grid"] .workspace-file img { place-self: center; }
+.workspace-table[data-layout="grid"] .workspace-file { background: linear-gradient(var(--drive-panel) 4.8rem, transparent 4.8rem) !important; }
+.workspace-table[data-layout="grid"] .workspace-more { position: absolute !important; inset: .25rem .35rem auto auto; inline-size: 2.7rem !important; }
+.workspace-table[data-layout="grid"] .workspace-meta { display: inline-block; margin-inline-end: .4rem; }
+#workspace-selection { padding-block: .5rem; color: var(--drive-focus); }
+#workspace-details { border-radius: .65rem; background: var(--drive-panel); padding: 1rem; font-size: .75rem; overflow-wrap: anywhere; }
+#workspace-details h2 { margin: 0; font-size: .95rem; padding-block-end: .85rem; border-block-end: 1px solid var(--drive-line); }
+#workspace-details dt { font-weight: 700; margin-block-start: 1.15rem; }
+#workspace-details dd { margin: .2rem 0 0; color: var(--awai-muted, #496078); }
+#workspace-details #file-sync .actions { display: grid; }
+#workspace-details #file-sync button { min-block-size: 44px; border-radius: .45rem; font-size: .75rem; }
+#workspace-details #file-sync details { margin-block-start: .7rem; }
+.workspace-popup { border: 1px solid var(--drive-line, #d9dee7); border-radius: .65rem; padding: .45rem; background: var(--drive-surface, #fff); color: var(--drive-ink, #253029); box-shadow: 0 8px 24px #26342f30; }
+.workspace-popup button { display: block; border: 0; background: transparent; color: inherit; inline-size: 100%; text-align: start; min-block-size: 44px; }
+.workspace-dialog { max-inline-size: min(34rem, 91vw); border-radius: .75rem; }
+.workspace-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; max-block-size: 45dvh; overflow: auto; }
+.workspace-dialog form[method="dialog"] { display: inline; }
+#workspace-folders { max-block-size: 44dvh; overflow: auto; padding: 0; }
+#workspace-folders button { display: block; text-align: start; inline-size: 100%; }
+.drive-shell :where(a,button,input,select,summary):focus-visible { outline: 2px solid var(--drive-focus); outline-offset: 2px; }
+@media (hover: hover) {
+  .drive-shell #files .workspace-item:hover:not([data-selected]), .workspace-popup button:hover { background: var(--drive-hover, #f1eee7); }
+}
+.drive-shell #files .workspace-item:active:not([data-selected]) { background: var(--drive-pressed); }
+@media (prefers-reduced-motion: no-preference) {
+  .workspace-item { transition: background-color .12s ease-out; }
+  .workspace-item:active { transition-duration: .08s; }
+  .workspace-popup:popover-open { animation: workspace-reveal .14s ease-out; }
+  #workspace-preview[open] { animation: workspace-reveal .22s ease-out; }
+}
+@keyframes workspace-reveal { from { opacity: 0; translate: 0 -3px; } to { opacity: 1; translate: 0 0; } }
+@media (min-width: 52rem) {
+  .drive-shell { display: grid; grid-template-columns: 13.2rem minmax(0, 1fr); gap: 0; }
+  .drive-shell .drive-nav { position: sticky; inset-block-start: 0; block-size: 100dvh; padding: 1.4rem 1.1rem 1rem; }
+  .drive-nav .workspace-brand { margin-block-end: 1.25rem; }
+  .drive-nav .workspace-add { margin-block-end: 1.3rem; }
+  .drive-shell .drive-nav a:not(.workspace-brand) { min-block-size: 2.55rem; }
+}
+@media (max-width: 67rem) {
+  .workspace-body { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 51.99rem) {
+  .drive-shell { display: block; }
+  .drive-shell main { padding: 1.25rem 1.25rem max(6.6rem, calc(5.6rem + env(safe-area-inset-bottom))); }
+  .drive-shell .drive-nav { position: fixed; inset: auto 0 0; justify-content: space-evenly; padding: .55rem .25rem max(.55rem,env(safe-area-inset-bottom)); }
+  .drive-shell .drive-nav a { display: grid; place-content: center; min-block-size: 48px; font-size: .72rem; flex: 1; white-space: nowrap; text-align: center; }
+  .drive-shell .drive-nav :is(.workspace-brand,.workspace-add,footer,a[href="#starred"],a[href="#trash"]) { display: none; }
+  .drive-shell .workspace-add-mobile { display: inline-flex; }
+  .workspace-header { margin-block-end: 1.15rem; }
+  .workspace-filters select, .workspace-view-controls select, .workspace-view-controls button, #workspace-selection button { min-block-size: 48px !important; }
+  .workspace-columns { display: none; }
+  .drive-shell .workspace-table .workspace-item { grid-template-columns: minmax(0,1fr) auto 48px; border-radius: 0; border-block-end: 1px solid var(--drive-line); margin: 0; min-block-size: 64px; }
+  .workspace-meta.kind, .workspace-meta.modified { display: none; }
+  .workspace-meta.residency { font-size: .65rem; }
+  .drive-shell #files .workspace-item :is(.workspace-file,.workspace-more) { min-block-size: 48px; }
+  #workspace-details { margin-block-start: .4rem; }
+}
+@media (prefers-color-scheme: dark) {
+  .drive-shell { --drive-paper: #202723; --drive-surface: #2c3630; --drive-panel: #28342e; --drive-ink: #eef2e9; --drive-hover: #35483f; --drive-pressed: #436052; --drive-line: #48564d; --drive-clay: #a94630; }
+  .workspace-label { color: #efb49e; }
+  .workspace-file img,.workspace-more img,.drive-search-controls .search-input img { filter: brightness(1.8); }
+}
+
+/* The search form remains one semantic unit, with its controls aligned in the desktop header. */
+.workspace-header .workspace-label { padding: 0; background: none; }
+.drive-shell .drive-nav { align-items: stretch; }
+.drive-shell .drive-nav .workspace-brand img { margin: 0; }
+.drive-shell .drive-nav footer { align-self: stretch; }
+.drive-shell #files .workspace-meta { font-weight: 400; }
+.drive-shell .workspace-table .workspace-item { padding-inline-start: 1rem; }
+.drive-shell #files .workspace-file { justify-content: flex-start; }
+.drive-search-controls input { min-block-size: 44px; background: transparent; border-radius: .5rem; }
+.drive-search-controls button { min-block-size: 44px; border-radius: .5rem; font-size: .75rem; padding: .4rem .65rem; }
+.workspace-popup { margin: 0; position: fixed; inset: auto; min-inline-size: 12rem; }
+#workspace-create { inset: 7rem auto auto 1.2rem; }
+.drive-shell .workspace-listbar nav { margin: 0; }
+@media (min-width: 67.01rem) {
+  .drive-shell main { position: relative; }
+  .workspace-header { min-block-size: 5.3rem; margin: 0; border-block-end: 1px solid var(--drive-line); align-items: start; padding-top: .15rem; }
+  .workspace-header .drive-settings { margin-block-start: .75rem; }
+  .drive-search-controls { position: absolute; inset-block-start: 2.05rem; inset-inline: 36% 10rem; }
+  .drive-search-controls .search-input { flex: 1 1 12rem; }
+  .workspace-filters { margin-block: 1rem .25rem; }
+  .drive-search { margin-block-end: .45rem; }
+}
+@media (max-width: 51.99rem) {
+  #workspace-create { inset: auto 1.25rem calc(5.5rem + env(safe-area-inset-bottom)) 1.25rem; }
+  .drive-shell .workspace-nav-compact { display: inline-flex; flex-wrap: wrap; gap: .35rem; }
+}
+.drive-shell main { margin: 0; }
+.drive-search-controls:has(input:placeholder-shown) #search-clear { display: none; }
+@media (max-width: 36rem) {
+  .workspace-listbar nav:has(#back[hidden]), #refresh { display: none; }
+  .workspace-listbar { gap: .2rem; }
+  .workspace-view-controls { gap: .25rem; }
+}
