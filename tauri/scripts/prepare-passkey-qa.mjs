@@ -32,9 +32,21 @@ config.productName = 'Awai Drive Passkey QA';
 for (const window of config.app.windows) window.title = config.productName;
 await writeFile(configPath, JSON.stringify(config, null, 2) + '\n');
 
-if (!macOS) await prepareAndroid();
+if (macOS) await prepareMac();
+else await prepareAndroid();
 if (androidBroker) await prepareHome(resolve(args[1]));
 console.log(output);
+
+async function prepareMac() {
+  const source = join(tauri, 'src', 'lib.rs');
+  await replace(source, `    let opened = std::process::Command::new("/usr/bin/open")
+        .arg("--").arg(url).status().is_ok_and(|status| status.success());
+    if !opened { return Err("browser-unavailable".into()); }
+    Ok(serde_json::Value::Null)`,
+    `    // The separate QA bundle uses the existing manual URL display,
+    // so its requests never open the account holder's browser profile.
+    Err("browser-unavailable".into())`);
+}
 
 async function prepareAndroid() {
   const app = join(tauri, 'gen', 'android', 'app');
