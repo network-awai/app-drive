@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import { fixturePackInPrompt } from "./qa-pack-consent.mjs";
 
 const [serial, action, directory] = process.argv.slice(2);
 assert(/^[a-zA-Z0-9._:-]+$/.test(serial ?? '') &&
@@ -90,7 +91,7 @@ try {
         if(await done.isVisible())break;
         assert(i<ids.size,'Observed more consent requests than declared fixture packs');
         const prompt=await dialog.textContent();
-        const approved=[...ids].find(id=>prompt.includes('https://yataverse.com/awai-drive/v1/packs/'+id));
+        const approved=fixturePackInPrompt(prompt,ids);
         assert(approved&&!approvals.has(approved),'Unexpected storage consent request');
         approvals.add(approved);
         await allow.click();
