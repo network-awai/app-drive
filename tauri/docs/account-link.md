@@ -95,3 +95,13 @@ encrypted packs to Yataverse and checks the product's pinned receipts and HTTPS
 readback. The receivers then use the product's normal account, consent, and restore
 flow with their respective grants. This script never changes account state or
 imports private keys.
+
+For the Android half, set `AWAI_QA_PLAYWRIGHT` as above and use the isolated
+package made from this revision. `qa-restore-android.mjs SERIAL probe` checks
+for verified account status and the restore screen. After QA authorization,
+`qa-restore-android.mjs SERIAL recipient OUTPUT_FILE` exports the public
+recipient. After the fixture is published, run
+`qa-restore-android.mjs SERIAL restore FIXTURE_DIRECTORY`. The runner proves
+that each pack was fetched over HTTPS with the WebView cache disabled, and
+independently hashes the files created in the QA app sandbox. It never
+installs or clears either app package.
