@@ -132,16 +132,6 @@ fn read_file(path: &Path) -> Result<File> {
     }
     Ok(file)
 }
-fn rename_exclusive(from: &Path, to: &Path) -> Result<()> {
-    let from = CString::new(from.as_os_str().as_bytes()).map_err(|_| "invalid-path")?;
-    let to = CString::new(to.as_os_str().as_bytes()).map_err(|_| "invalid-path")?;
-    // RENAME_EXCL enforces no-overwrite in the same atomic filesystem operation.
-    if unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) } == 0 {
-        Ok(())
-    } else {
-        Err(io(std::io::Error::last_os_error()))
-    }
-}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -511,7 +501,7 @@ impl Vault {
                 sync_dir(&staged.resolve(&entry.path)?)?;
             }
             sync_dir(&stage)?;
-            rename_exclusive(&stage, &dest)?;
+            super::desktop::rename_exclusive(&stage, &dest)?;
         }
         sync_dir(dest.parent().ok_or("invalid-path")?)?;
         sync_dir(&self.root)?;

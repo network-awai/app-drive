@@ -3,6 +3,7 @@ export function mountWnfsSharing(controls, sync, task, enabled, refresh) {
   const ja = document.documentElement.lang === 'ja';
   const label = (en, jp) => ja ? jp : en;
   const details = document.createElement('details');
+  details.id = 'drive-sharing';
   const heading = document.createElement('summary');
   heading.textContent = label('Snapshot sharing', 'スナップショットの共有');
   const input = document.createElement('textarea');
