@@ -180,3 +180,24 @@ head discovery and storage-backed current authorization still require the
 published authority. In the absence of that authority, a failed restore
 shows a generic error. The design's revocation message requires a verified
 revocation decision.
+
+### Copy a file from an existing AwaiVol
+
+Awai OS uses the Android build of this Drive app, under the package ID
+`network.awai.drive`. The app owns user interaction and its app-private files.
+AwaiFS/WNFS owns the snapshot format. The existing AwaiVol daemon owns legacy
+packs and the macOS WebDAV mount.
+
+When the legacy volume is already mounted by macOS, open Awai Drive, navigate
+to the destination inside Drive, use **Add files**, and choose a file from that
+volume in the system picker. Drive reads just the selected file through macOS,
+streams it to app-private staging, and verifies the copy's SHA-256 before it
+appears in Drive. A name collision leaves the existing destination intact. The
+source file and volume remain available in Finder. Imports stay local until
+the user uses the existing sync flow. The file size limit is 1 GiB on both
+platforms. Android continues to use its existing local document picker.
+
+This selected-file workflow carries file bytes and their names. It does not
+translate the legacy journal, access rules, history, remote keys, or leases.
+A full legacy volume migration requires a separate copy and restore check
+before any existing storage path is retired.

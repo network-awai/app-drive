@@ -3,6 +3,8 @@ struct AndroidDrive(tauri::plugin::PluginHandle<tauri::DynRuntime>);
 #[cfg(target_os="macos")]
 mod desktop;
 #[cfg(target_os="macos")]
+mod desktop_picker;
+#[cfg(target_os="macos")]
 mod desktop_vault;
 #[cfg(target_os="macos")]
 mod desktop_account;
@@ -23,18 +25,6 @@ fn macos_call(local:&desktop::Local, vault:&mut desktop_vault::Vault, op:&str, r
   "organizeRecover"=>{local.recover(&s("id")?)?;Ok(serde_json::Value::Null)}
   "previewText"=>Ok(serde_json::json!({"text":local.preview_text(&s("path")?)?})),
   "openAccountBrowser"=>open_account_browser(&s("url")?),
-  "pick"=> {
-   let output=std::process::Command::new("/usr/bin/osascript").args(["-e","POSIX path of (choose file)"])
-       .output().map_err(|_|"import-unavailable")?;
-   if !output.status.success(){
-    return Err(if String::from_utf8_lossy(&output.stderr).contains("(-128)"){"import-cancelled"}else{"import-unavailable"}.into());
-   }
-   let selected=std::str::from_utf8(&output.stdout).map_err(|_|"invalid-path")?;
-   let source=std::path::Path::new(selected.strip_suffix('\n').unwrap_or(selected));
-   if !source.is_absolute(){return Err("invalid-path".into());}
-   local.import_file(&s("parent")?,source)?;
-   Ok(serde_json::Value::Null)
-  },
   _=>vault.call(local,op,request),
  }
 }
@@ -56,7 +46,14 @@ async fn drive_call(_app:tauri::AppHandle, request:serde_json::Value)->Result<se
  let op=request.get("op").and_then(|v|v.as_str()).ok_or("invalid-operation")?.to_owned();
  if !["list","mkdir","createText","pick","open","organizeMove","organizeTrash","organizeTrashList","organizeRecover","previewText","accountPublic","openAccountBrowser","accountProof","accountPrepare","accountRead","accountSave","accountBindWnfs","vaultStatus","vaultSession","vaultRecord","vaultInventory","vaultRead","vaultCommit","vaultEvict","vaultRestoreBegin","vaultRestoreWrite","vaultRestorePublish","vaultWnfsRecipients","vaultWnfsRecipientSet","vaultWnfsInventory","vaultWnfsCommit","vaultWnfsRestoreBegin","vaultWnfsRestoreWrite","vaultWnfsRestoreAbort","vaultWnfsRestorePublish"].contains(&op.as_str()){return Err("unsupported-operation".into())}
  #[cfg(target_os="android")]{use tauri::Manager;return _app.state::<AndroidDrive>().0.run_mobile_plugin_async("execute",serde_json::json!({"payload":request.to_string()})).await.map_err(|e| { let message=e.to_string(); ["unsynced-data","recovery-required","restore-mismatch","sync-size-limit","file-busy","file-exists","entry-limit","invalid-name","invalid-path","storage-full","file-too-large","import-cancelled","source-size-changed","local-provider-required","account-broker-unavailable","account-approval-denied","account-mismatch","account-device-key-missing","invalid-account-link"].iter().find(|code|message.contains(**code)).unwrap_or(&"drive-operation-failed").to_string() });}
- #[cfg(target_os="macos")]{use tauri::Manager;let app=_app.clone();return tauri::async_runtime::spawn_blocking(move||{let local=app.state::<desktop::Local>();let vault=app.state::<std::sync::Mutex<desktop_vault::Vault>>();let mut vault=vault.lock().map_err(|_|"storage-unavailable")?;macos_call(&local,&mut vault,&op,&request)}).await.map_err(|_|"drive-operation-failed".to_string())?;}
+ #[cfg(target_os="macos")]{use tauri::Manager;
+ if op=="pick" {
+     let parent=request.get("parent").and_then(|v|v.as_str()).ok_or("invalid-path")?.to_owned();
+     let source=desktop_picker::pick(&_app).await?;
+     return tauri::async_runtime::spawn_blocking(move|| _app.state::<desktop::Local>().import(&parent,&source))
+         .await.map_err(|_|"drive-operation-failed".to_string())?;
+ }
+ let app=_app.clone();return tauri::async_runtime::spawn_blocking(move||{let local=app.state::<desktop::Local>();let vault=app.state::<std::sync::Mutex<desktop_vault::Vault>>();let mut vault=vault.lock().map_err(|_|"storage-unavailable")?;macos_call(&local,&mut vault,&op,&request)}).await.map_err(|_|"drive-operation-failed".to_string())?;}
  #[cfg(not(any(target_os="android",target_os="macos")))] Err("android-adapter-required".into())
 }
 #[cfg_attr(mobile,tauri::mobile_entry_point)]

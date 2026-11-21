@@ -7,11 +7,13 @@
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{Read, Write};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 
 pub const MAX_ENTRIES: usize = 1000;
 pub const MAX_TEXT: usize = 65536;
+const MAX_IMPORT: u64 = 1024 * 1024 * 1024;
 pub const RESERVE: u64 = 64 * 1024 * 1024;
 
 pub struct Local {
@@ -304,40 +306,90 @@ impl Local {
         Ok(())
     }
 
-    pub fn import_file(&self, parent: &str, source: &Path) -> Result<(), String> {
-        use std::os::unix::fs::OpenOptionsExt;
-        const MAX_BYTES: u64 = 1024 * 1024 * 1024;
-        let filename = source.file_name().and_then(|name| name.to_str()).ok_or("invalid-name")?;
-        let (dir, destination) = self.child(parent, filename)?;
-        if self.list(parent)?.len() >= MAX_ENTRIES { return Err("entry-limit".into()); }
-        if fs::symlink_metadata(&destination).is_ok() { return Err("file-exists".into()); }
-        let input = fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(source).map_err(io)?;
-        let meta = input.metadata().map_err(io)?;
-        if !meta.is_file() { return Err("invalid-path".into()); }
-        let length = meta.len();
-        if length > MAX_BYTES { return Err("file-too-large".into()); }
-        if available(&dir).map_or(false, |space| space < length + RESERVE) { return Err("storage-full".into()); }
-        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| "storage-unavailable")?.as_nanos();
-        let pending = dir.join(format!(".pending-import-{}-{stamp}", std::process::id()));
-        let mut output = fs::OpenOptions::new().write(true).create_new(true).open(&pending).map_err(io)?;
-        let result = (|| {
-            let written = std::io::copy(&mut input.take(length + 1), &mut output).map_err(io)?;
-            if written != length { return Err("source-size-changed".into()); }
-            output.sync_all().map_err(io)?;
-            rename_exclusive(&pending, &destination)?;
-            sync_dir(&dir)
-        })();
-        if result.is_err() { let _ = fs::remove_file(&pending); }
-        result
-    }
-
     pub fn preview_text(&self, path: &str) -> Result<String, String> {
         let f = self.file(path)?;
         let mut bytes = Vec::new();
         fs::File::open(f).map_err(io)?.take(65_536).read_to_end(&mut bytes).map_err(io)?;
         Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    /// Copy a file explicitly selected by the native picker into Drive storage.
+    /// Never write into the selected volume or take a source path from the WebView.
+    pub fn import(&self, parent: &str, source: &Path) -> Result<serde_json::Value, String> {
+        let name = source.file_name().and_then(|n| n.to_str()).ok_or("invalid-name")?;
+        if self.list(parent)?.len() >= MAX_ENTRIES {
+            return Err("entry-limit".into());
+        }
+        let (dir, dest) = self.child(parent, name)?;
+        if fs::symlink_metadata(&dest).is_ok() {
+            return Err("file-exists".into());
+        }
+        let selected = fs::symlink_metadata(source).map_err(io)?;
+        if !selected.is_file() {
+            return Err("invalid-path".into());
+        }
+        let mut input = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(source)
+            .map_err(io)?;
+        let before = input.metadata().map_err(io)?;
+        if !before.is_file() || (selected.dev(), selected.ino()) != (before.dev(), before.ino()) {
+            return Err("invalid-path".into());
+        }
+        if before.len() > MAX_IMPORT {
+            return Err("file-too-large".into());
+        }
+        if available(&dir).is_some_and(|free| free < RESERVE + before.len()) {
+            return Err("storage-full".into());
+        }
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .map_err(|_| "drive-operation-failed")?;
+        let tmp = dir.join(format!(".pending-{}-{}.part", std::process::id(), stamp));
+        let mut output = fs::OpenOptions::new()
+            .read(true).write(true).create_new(true).mode(0o600)
+            .open(&tmp).map_err(io)?;
+
+        let result = (|| {
+            let mut buf = vec![0; 256 * 1024];
+            let mut total = 0u64;
+            let mut source_hash = Sha256::new();
+            loop {
+                let n = input.read(&mut buf).map_err(io)?;
+                if n == 0 { break; }
+                total += n as u64;
+                if total > before.len() { return Err("source-size-changed".into()); }
+                output.write_all(&buf[..n]).map_err(io)?;
+                source_hash.update(&buf[..n]);
+            }
+            let after = input.metadata().map_err(io)?;
+            if total != before.len() || after.len() != before.len() ||
+                (before.mtime(), before.mtime_nsec(), before.ctime(), before.ctime_nsec()) !=
+                (after.mtime(), after.mtime_nsec(), after.ctime(), after.ctime_nsec()) {
+                return Err("source-size-changed".into());
+            }
+            output.sync_all().map_err(io)?;
+            drop(output);
+
+            let expected = source_hash.finalize();
+            let mut saved = fs::File::open(&tmp).map_err(io)?;
+            let mut copy_hash = Sha256::new();
+            loop {
+                let n = saved.read(&mut buf).map_err(io)?;
+                if n == 0 { break; }
+                copy_hash.update(&buf[..n]);
+            }
+            if copy_hash.finalize() != expected {
+                return Err("restore-mismatch".into());
+            }
+            fs::hard_link(&tmp, &dest).map_err(io)?;
+            sync_dir(&dir)?;
+            Ok(serde_json::json!({"path": self.path(&dest), "sha256": format!("{:x}", expected), "bytes": total}))
+        })();
+        let _ = fs::remove_file(&tmp);
+        result
     }
 
     pub fn file(&self, rel: &str) -> Result<PathBuf, String> {
@@ -363,9 +415,9 @@ mod tests {
         let l = temp();
         let outside = l.root.parent().unwrap().join("import.bin");
         fs::write(&outside, &[0, 1, 2, 255]).unwrap();
-        l.import_file("", &outside).unwrap();
+        l.import("", &outside).unwrap();
         assert_eq!(fs::read(l.file("import.bin").unwrap()).unwrap(), [0, 1, 2, 255]);
-        assert_eq!(l.import_file("", &outside).unwrap_err(), "file-exists");
+        assert_eq!(l.import("", &outside).unwrap_err(), "file-exists");
         assert_eq!(fs::read(&outside).unwrap(), [0, 1, 2, 255]);
     }
 
@@ -419,6 +471,31 @@ mod tests {
         assert_eq!(fs::read_to_string(l.file("メモ/note.txt").unwrap()).unwrap(), "hello");
         assert_eq!(l.mkdir("", "メモ"), Err("file-exists".to_string()));
         assert!(l.list("").unwrap()[0]["directory"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn picked_file_copies_verified_bytes_without_replacing_either_side() {
+        let local = temp();
+        let source = temp();
+        local.mkdir("", "Imported").unwrap();
+        let selected = source.root.join("sample.bin");
+        let bytes = vec![0x6d; 12 * 1024 * 1024];
+        fs::write(&selected, &bytes).unwrap();
+        let receipt = local.import("Imported", &selected).unwrap();
+        assert_eq!(receipt["bytes"], bytes.len());
+        assert_eq!(receipt["sha256"], format!("{:x}", Sha256::digest(&bytes)));
+        let dest = local.file("Imported/sample.bin").unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), bytes);
+        assert_eq!(fs::read(&selected).unwrap(), bytes);
+        fs::write(&selected, b"changed original").unwrap();
+        assert_eq!(local.import("Imported", &selected), Err("file-exists".to_string()));
+        assert_eq!(fs::read(&dest).unwrap(), bytes);
+        let alias = source.root.join("link.bin");
+        std::os::unix::fs::symlink(&selected, &alias).unwrap();
+        assert!(local.import("Imported", &alias).is_err());
+        assert_eq!(local.list("Imported").unwrap().len(), 1);
+        fs::remove_dir_all(local.root).unwrap();
+        fs::remove_dir_all(source.root).unwrap();
     }
 
     #[test]
