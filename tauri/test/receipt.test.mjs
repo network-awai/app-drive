@@ -1,7 +1,7 @@
 // Drive's storage receipt check (AWAI-3314), run against the shipped bundle generated/receipt.js.
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';
 import { ed25519 } from '@noble/curves/ed25519';
-import { verifyDrivePackReceipt, receiptDigest, parseFields, keyIdFor } from '../generated/receipt.js';
+import { verifyDrivePackReceipt, receiptDigest, parseFields, keyIdFor, receiptCidFor } from '../generated/receipt.js';
 const read = (p) => JSON.parse(fs.readFileSync(new URL(p, import.meta.url), 'utf8'));
 const REAL = read('./fixtures/yataverse-pack-receipt-20261118.json');
 const META = read('./fixtures/yataverse-pack-receipt-20261118.meta.json');
@@ -67,4 +67,27 @@ test('the pinned yataverse.com key set is the one the service publishes in its s
   assert.equal(TRUST.signer, 'did:web:yataverse.com');
   assert.deepEqual(TRUST.keys.map((k) => [k.keyId, k.keyEpoch]), [['0xad062e68a246d01a369edc6d3713cbbc737b8469208796e52b8c6e943e92eafc', 1]]);
   assert.equal(hex(keyIdFor(Buffer.from(TRUST.keys[0].publicKeyJwk.x, 'base64url'))), TRUST.keys[0].keyId);
+});
+
+test('receiptCid is the CID yataverse.com returned for the real receipt, and a different one is refused', () => {
+  assert.equal(receiptCidFor(REAL.receipt), REAL.receiptCid);
+  assert.equal(verifyDrivePackReceipt(REAL, TRUST, { id: META.id, size: META.size }).receiptCid, REAL.receiptCid);
+  const t = structuredClone(REAL); t.receiptCid = 'bafyreiaaaa';
+  rejects(() => verifyDrivePackReceipt(t, TRUST, { id: META.id, size: META.size }), 'cid-mismatch');
+  const { receiptCid, ...bare } = REAL;
+  assert.equal(verifyDrivePackReceipt(bare, TRUST, { id: META.id, size: META.size }).receiptCid, receiptCid);
+});
+
+test('a pinned key set with a rotated epoch still verifies receipts of the older epoch', () => {
+  const sk2 = ed25519.utils.randomPrivateKey(), pk2 = ed25519.getPublicKey(sk2), kid2 = hex(keyIdFor(pk2));
+  const keys = { v: 1, signer: 'did:web:yataverse.com', keys: [
+    { ...pinned().keys[0], notAfter: 5000 },
+    { keyId: kid2, keyEpoch: 2, alg: 'Ed25519', publicKeyJwk: { kty: 'OKP', crv: 'Ed25519', x: b64url(pk2) }, notBefore: 5000, notAfter: null, revokedAt: null }] };
+  const old = verifyDrivePackReceipt(signed({ acceptedAt: 4999 }), keys, { id, size });
+  assert.equal(old.keyEpoch, 1);
+  rejects(() => verifyDrivePackReceipt(signed({ acceptedAt: 5000 }), keys, { id, size }), 'accepted-after-key-expired');
+  const receipt = { ...signed().receipt.receipt, acceptedAt: 6000, keyId: kid2, keyEpoch: 2 };
+  const env = { v: 1, receipt, sig: { alg: 'Ed25519', key: kid2, sig: b64url(ed25519.sign(receiptDigest(parseFields(receipt)), sk2)) } };
+  const now = verifyDrivePackReceipt({ sha256: id, bytes: size, receipt: env }, keys, { id, size });
+  assert.equal(now.keyEpoch, 2); assert.equal(now.receiptCid, receiptCidFor(env)); assert.notEqual(now.receiptCid, old.receiptCid);
 });

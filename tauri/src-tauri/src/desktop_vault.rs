@@ -67,6 +67,47 @@ fn digest_id(id: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
 }
+const RECEIPT_LIMIT: usize = 4096;
+/// Shape check of the root receipt the WebView verified against the build-pinned key set
+/// (receipt/verify.mjs): it must name this commit's capsule pack and its key epoch.
+fn root_receipt(raw: &Value, capsule: &str) -> Result<Option<Value>> {
+    if raw.is_null() {
+        return Ok(None);
+    }
+    let bad = || String::from("invalid-receipt");
+    let object = raw.as_object().filter(|o| o.len() == 5).ok_or_else(bad)?;
+    let cid = object
+        .get("receiptCid")
+        .and_then(Value::as_str)
+        .ok_or_else(bad)?;
+    let key_id = object
+        .get("keyId")
+        .and_then(Value::as_str)
+        .ok_or_else(bad)?;
+    let epoch = object
+        .get("keyEpoch")
+        .and_then(Value::as_u64)
+        .filter(|e| (1..=u32::MAX as u64).contains(e))
+        .ok_or_else(bad)?;
+    let envelope = object.get("receipt").ok_or_else(bad)?;
+    let fields = &envelope["receipt"];
+    let subject = format!("0x{capsule}");
+    if object.get("pack").and_then(Value::as_str) != Some(capsule)
+        || !(cid.len() == 59
+            && cid.starts_with("bafyrei")
+            && cid.bytes().all(|b| matches!(b, b'a'..=b'z' | b'2'..=b'7')))
+        || !(key_id.len() == 66 && key_id.starts_with("0x") && digest_id(&key_id[2..]))
+        || envelope["v"].as_u64() != Some(1)
+        || fields["subject"].as_str() != Some(&subject)
+        || fields["contentDigest"].as_str() != Some(&subject)
+        || fields["keyId"].as_str() != Some(key_id)
+        || fields["keyEpoch"].as_u64() != Some(epoch)
+        || serde_json::to_vec(raw).map_err(|_| bad())?.len() > RECEIPT_LIMIT
+    {
+        return Err(bad());
+    }
+    Ok(Some(raw.clone()))
+}
 fn private_dir(path: &Path) -> Result<()> {
     match fs::DirBuilder::new().mode(0o700).create(path) {
         Ok(()) => Ok(()),
@@ -191,6 +232,10 @@ struct Control {
     account_link: Option<Value>,
     record: Option<String>,
     wnfs: Option<Value>,
+    /// Verified storage receipt of the current WNFS root only (owner decision 2026-11-22).
+    /// Replaced on every commit; no history is kept. Restore does not need it.
+    #[serde(default)]
+    root_receipt: Option<Value>,
     recipients: Recipients,
 }
 #[derive(Default, Deserialize, Serialize)]
@@ -582,10 +627,19 @@ impl Vault {
                         .zip(inventory(local).ok())
                         .is_some_and(|(a, b)| a == b)
                 });
+                let capsule = state
+                    .wnfs
+                    .as_ref()
+                    .and_then(|head| head["capsule"].as_str());
+                let receipt = state
+                    .root_receipt
+                    .as_ref()
+                    .filter(|r| capsule.is_some() && r["pack"].as_str() == capsule)
+                    .map(|r| json!({"pack":r["pack"],"receiptCid":r["receiptCid"],"keyEpoch":r["keyEpoch"]}));
                 Ok(
                     json!({"initialized":true,"synced":synced,"origin":state.wnfs
                     .as_ref().and_then(|head|head["origin"].as_str()).unwrap_or(""),
-                    "wnfs":state.wnfs.is_some(),"evicted":false}),
+                    "wnfs":state.wnfs.is_some(),"evicted":false,"receipt":receipt}),
                 )
             }
             "vaultRecord" => {
@@ -669,6 +723,7 @@ impl Vault {
                 {
                     return Err("invalid-root".into());
                 }
+                state.root_receipt = root_receipt(&request["receipt"], capsule)?;
                 state.wnfs = Some(
                     json!({"schema":"awai.drive.wnfs.v1","root":root,"capsule":capsule,
                     "packs":packs,"origin":origin,"entries":request["entries"],"basis":request["basis"]}),
@@ -700,6 +755,47 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn receipt_for(capsule: &str) -> Value {
+        let key = format!("0x{}", "ad".repeat(32));
+        json!({"pack":capsule,"receiptCid":format!("bafyrei{}", "a".repeat(52)),"keyId":key,"keyEpoch":1,
+            "receipt":{"v":1,"receipt":{"subject":format!("0x{capsule}"),"contentDigest":format!("0x{capsule}"),
+            "keyId":key,"keyEpoch":1},"sig":{"alg":"Ed25519","key":key,"sig":"x"}}})
+    }
+
+    #[test]
+    fn root_receipt_must_name_the_committed_capsule_and_its_epoch() {
+        let capsule = "ab".repeat(32);
+        let good = receipt_for(&capsule);
+        assert_eq!(root_receipt(&good, &capsule).unwrap(), Some(good.clone()));
+        assert_eq!(root_receipt(&Value::Null, &capsule).unwrap(), None);
+        assert!(root_receipt(&good, &"cd".repeat(32)).is_err());
+        let mut epoch = good.clone();
+        epoch["keyEpoch"] = json!(2);
+        assert!(root_receipt(&epoch, &capsule).is_err());
+        let mut cid = good.clone();
+        cid["receiptCid"] = json!("bafyreiAAAA");
+        assert!(root_receipt(&cid, &capsule).is_err());
+        let mut extra = good.clone();
+        extra["history"] = json!([]);
+        assert!(root_receipt(&extra, &capsule).is_err());
+        let mut large = good;
+        large["receipt"]["sig"]["sig"] = json!("x".repeat(RECEIPT_LIMIT));
+        assert!(root_receipt(&large, &capsule).is_err());
+    }
+
+    #[test]
+    fn control_records_without_a_receipt_still_open_and_keep_one_receipt() {
+        let old = serde_json::to_vec(&json!({"record":"r","wnfs":null,
+            "recipients":{"revision":0,"items":{}}}))
+        .unwrap();
+        let mut state: Control = serde_json::from_slice(&old).unwrap();
+        assert!(state.root_receipt.is_none());
+        state.root_receipt = Some(receipt_for(&"ab".repeat(32)));
+        let sealed = seal_control(&[3; 64], &state).unwrap();
+        let reopened = open_control(&[3; 64], &sealed).unwrap();
+        assert_eq!(reopened.root_receipt, state.root_receipt);
     }
 
     #[test]
@@ -753,6 +849,38 @@ mod tests {
         let session = vault.call(&local, "vaultSession", &json!({})).unwrap();
         assert!(session["secret"] == first["secret"]);
         assert_eq!(session["record"], "test owner envelope");
+
+        // The Keychain-sealed control record keeps only the current root's receipt.
+        let commit = |capsule: &str, receipt: Value| {
+            json!({"root":"0".repeat(64),"capsule":capsule,"packs":["1".repeat(64)],
+                "origin":"https://yataverse.com","entries":[],"recipientRevision":0,"basis":"b","receipt":receipt})
+        };
+        let first_root = "ab".repeat(32);
+        vault
+            .call(
+                &local,
+                "vaultWnfsCommit",
+                &commit(&first_root, receipt_for(&first_root)),
+            )
+            .unwrap();
+        drop(vault);
+        let mut vault = Vault::new(scratch.0.join("vault"), &bundle).unwrap();
+        let status = vault.call(&local, "vaultStatus", &json!({})).unwrap();
+        assert_eq!(status["receipt"]["pack"], first_root.as_str());
+        assert_eq!(status["receipt"]["keyEpoch"], 1);
+        let next_root = "cd".repeat(32);
+        assert!(vault
+            .call(
+                &local,
+                "vaultWnfsCommit",
+                &commit(&next_root, receipt_for(&first_root))
+            )
+            .is_err());
+        vault
+            .call(&local, "vaultWnfsCommit", &commit(&next_root, Value::Null))
+            .unwrap();
+        let status = vault.call(&local, "vaultStatus", &json!({})).unwrap();
+        assert!(status["receipt"].is_null());
     }
 
     #[test]

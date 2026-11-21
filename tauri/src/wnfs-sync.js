@@ -197,7 +197,14 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
         const packBytes = sealed.packs.reduce((n, pack) => n + pack.length, sealed.capsule.bytes.length);
         const dataIds = [];
         for (const pack of sealed.packs) dataIds.push(await packs.publish(pack, verifyReceipt));
-        const capsule = await packs.publish(sealed.capsule.bytes, verifyReceipt);
+        // Keep the verified storage receipt of the new root capsule only (owner decision 2026-11-22):
+        // the vault overwrites it on each commit, restore does not need it, eviction requires it.
+        let receipt = null;
+        const capsule = await packs.publish(sealed.capsule.bytes, verifyReceipt && (async (response, expected) => {
+          const verified = await verifyReceipt(response, expected);
+          if (verified) receipt = { pack: expected.id, receiptCid: verified.receiptCid, keyId: verified.keyId,
+            keyEpoch: verified.keyEpoch, receipt: response.receipt };
+        }));
         const grants = [];
         for (const { recipient, capsule: wrapped } of sealed.grants ?? []) {
           const id = await packs.publish(wrapped.bytes, verifyReceipt);
@@ -207,7 +214,7 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
         const publishedAt = performance.now();
         await invoke('vaultWnfsCommit', {
           root: sealed.capsule.root, capsule, packs: dataIds, origin, entries, recipientRevision: revision,
-          basis: sealed.basis,
+          basis: sealed.basis, receipt,
         });
         return { files: rows.filter(row => !row.directory).length, basis: sealed.basis,
           bytes: packBytes, grants, dataPacks: dataIds.length, sealMs: publishStart - sealStart, publishMs: publishedAt - publishStart };

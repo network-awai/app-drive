@@ -7,6 +7,9 @@
 import { keccak_256 } from '@noble/hashes/sha3';
 import { sha256 } from '@noble/hashes/sha2';
 import { ed25519 } from '@noble/curves/ed25519';
+import { encode as encodeDagCbor } from '@ipld/dag-cbor';
+import { CID } from 'multiformats/cid';
+import { create as createDigest } from 'multiformats/hashes/digest';
 
 const FIELDS = [
   ['kind', 'uint8'], ['subject', 'bytes'], ['size', 'uint64'], ['contentDigest', 'bytes32'],
@@ -70,9 +73,25 @@ export function receiptDigest(r) {
 
 export const keyIdFor = (publicKey) => sha256(concat([Uint8Array.of(0xed, 0x01), publicKey]));
 
+const CODEC_DAG_CBOR = 0x71, MULTIHASH_SHA2_256 = 0x12;
+
+/**
+ * CID of the receipt's canonical DAG-CBOR record {v, receipt, sig} (CIDv1, dag-cbor, sha2-256), the
+ * same record app-itonami-yataverse src/receipt.mjs `envelopeToDagCbor` stores and returns as receiptCid.
+ */
+export function receiptCidFor(env) {
+  const r = parseFields(env?.receipt);
+  const bytes = encodeDagCbor({ v: 1, receipt: r,
+    sig: { alg: env.sig.alg, key: fromHex(env.sig.key, 32, 'sig-key'), sig: fromB64url(env.sig.sig, 'signature') } });
+  return CID.create(1, CODEC_DAG_CBOR, createDigest(MULTIHASH_SHA2_256, sha256(bytes))).toString();
+}
+
 /**
  * Check the receipt in a Drive pack upload response against the pinned key set and the pack
- * this device sent (id = sha256 hex, size in bytes). -> { keyId, keyEpoch, acceptedAt }.
+ * this device sent (id = sha256 hex, size in bytes).
+ * -> { keyId, keyEpoch, acceptedAt, receiptCid }. A receiptCid in the response must equal the CID
+ * computed here. `keys.keys` may hold several epochs; each receipt is checked against the entry with
+ * its own keyId and keyEpoch and that entry's validity window, so older epochs stay verifiable.
  * Throws Error('receipt-...') on anything else.
  */
 export function verifyDrivePackReceipt(response, keys, { id, size }) {
@@ -84,8 +103,10 @@ export function verifyDrivePackReceipt(response, keys, { id, size }) {
   if (sig.length !== 64) fail('bad-signature');
   if (!same(fromHex(env.sig.key, 32, 'sig-key'), r.keyId)) fail('signature-key-is-not-receipt-key');
   // The key: pinned, same epoch, valid at acceptedAt and not revoked by then.
-  const entry = (keys?.keys ?? []).find((k) => k.keyId === '0x' + toHex(r.keyId));
-  if (!entry) fail('unknown-key');
+  // A key set may pin several epochs (rotation keeps the old entry with notAfter/revokedAt set).
+  const byKey = (keys?.keys ?? []).filter((k) => k.keyId === '0x' + toHex(r.keyId));
+  if (!byKey.length) fail('unknown-key');
+  const entry = byKey.find((k) => k.keyEpoch === r.keyEpoch) ?? byKey[0];
   if (entry.alg !== 'Ed25519' || entry.publicKeyJwk?.kty !== 'OKP' || entry.publicKeyJwk?.crv !== 'Ed25519') fail('bad-pinned-key');
   const publicKey = fromB64url(entry.publicKeyJwk.x, 'pinned-key');
   if (publicKey.length !== 32 || !same(keyIdFor(publicKey), r.keyId)) fail('pinned-key-does-not-match-key-id');
@@ -108,5 +129,7 @@ export function verifyDrivePackReceipt(response, keys, { id, size }) {
   // What an entry gateway may claim: stored and read back, nothing more.
   if (r.state !== STATE_LOCAL_DURABLE_READBACK) fail(r.state === 10 ? 'gateway-claims-policy-satisfied' : 'unknown-state');
   if (!STORE_CLASSES.includes(r.storeClass)) fail('unknown-store-class');
-  return { keyId: '0x' + toHex(r.keyId), keyEpoch: r.keyEpoch, acceptedAt: r.acceptedAt };
+  const receiptCid = receiptCidFor(env);
+  if (response.receiptCid !== undefined && response.receiptCid !== receiptCid) fail('cid-mismatch');
+  return { keyId: '0x' + toHex(r.keyId), keyEpoch: r.keyEpoch, acceptedAt: r.acceptedAt, receiptCid };
 }

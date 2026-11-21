@@ -141,7 +141,10 @@ test('Drive only commits WNFS after all readbacks, and restores into a staged co
   const sync = createWnfsSync({
     origin,
     packs: createDrivePackClient({ origin, capability: 'awai.drive.sync', broker, sha256: sha }),
-    verifyReceipt: (_receipt, { id }) => assert.ok(transport.has(id)),
+    verifyReceipt: (_receipt, { id }) => {
+      assert.ok(transport.has(id));
+      return { receiptCid: 'cid-' + id, keyId: '0xkey', keyEpoch: 1 };
+    },
     sha256: sha,
     async invoke(op, args) {
       nativeOps.push(op);
@@ -177,6 +180,10 @@ test('Drive only commits WNFS after all readbacks, and restores into a staged co
   await sync.sync({});
   assert.deepEqual(requests, ['upload', 'download', 'upload', 'download', 'upload', 'download']);
   assert.equal(committed.packs.length, 2);
+  // Only the new root capsule's receipt reaches the vault.
+  assert.deepEqual(Object.keys(committed.receipt).sort(), ['keyEpoch', 'keyId', 'pack', 'receipt', 'receiptCid']);
+  assert.equal(committed.receipt.pack, committed.capsule);
+  assert.equal(committed.receipt.receiptCid, 'cid-' + committed.capsule);
   const head = { ...committed, schema: 'awai.drive.wnfs.v1' };
   const count = nativeOps.length;
   requests.length = 0;

@@ -23,6 +23,8 @@ else await rm(wnfsBundle,{force:true});
 // receipt signed by one of these keys; rotating the service key needs a rebuild. Other origins get none.
 const trust=JSON.parse(await readFile(resolve(app,'receipt-trust.json'),'utf8')),receiptKeys=origin&&Object.hasOwn(trust,origin)?trust[origin]:null;
 if(receiptKeys&&!(Array.isArray(receiptKeys.keys)&&receiptKeys.keys.length))throw Error('empty receipt key set');
+// Keep retired epochs pinned (with notAfter/revokedAt) so receipts signed under them still verify.
+if(receiptKeys){const seen=new Set();for(const k of receiptKeys.keys){if(typeof k.keyId!=='string'||!/^0x[0-9a-f]{64}$/.test(k.keyId)||!Number.isSafeInteger(k.keyEpoch)||k.keyEpoch<1||seen.has(k.keyId+'/'+k.keyEpoch))throw Error('invalid receipt key set');seen.add(k.keyId+'/'+k.keyEpoch);}}
 await writeFile(resolve(out,'sync-config.js'),`export const syncOrigin=${JSON.stringify(origin)};export const wnfsEnabled=${wnfsEnabled};export const accountLinkEnabled=${accountLinkEnabled};export const receiptKeys=${JSON.stringify(receiptKeys)};`);
 const {clientRuntimeProblems,clientRuntimeConnectSrc}=await import('../vendor/platform/kotoba-client-runtime.js');
 if(clientRuntimeProblems(descriptor,capabilities,'http://tauri.localhost').length)throw Error('invalid sync descriptor');

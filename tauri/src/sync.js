@@ -17,7 +17,7 @@ const packs = createDrivePackClient({ origin: syncOrigin, capability: 'awai.driv
 function verifyReceipt(receipt, expected) {
   if (!receiptKeys) return;
   try {
-    verifyDrivePackReceipt(receipt, receiptKeys, expected);
+    return verifyDrivePackReceipt(receipt, receiptKeys, expected);
   } catch (error) {
     throw Error('storage-receipt-invalid:' + String(error?.message || error).slice(0, 80), { cause: error });
   }
@@ -52,7 +52,11 @@ export async function sync(){const s=await session(true);try{
  rows.directories=entries.filter(e=>e.directory).map(e=>e.path);const sealed=await core.sealSnapshot(s.record,s.secret,rows);const id=await packs.publish(sealed.bytes,verifyReceipt);
  await invoke('vaultCommit',{root:sealed.root,pack:id,origin:syncOrigin,entries});return {files:rows.length,root:sealed.root,pack:id};
  }finally{s.secret.fill(0);}}
-export async function evict(){return invoke('vaultEvict',{origin:syncOrigin});}
+// Eviction drops the local copy, so it needs the verified storage receipt of the current root
+// (owner decision 2026-11-22). A vault that does not report one keeps its files.
+// The vault reports receipt only for its current root.
+const evictable=s=>Boolean(receiptKeys&&typeof s.receipt?.receiptCid==='string');
+export async function evict(){if(!evictable(await invoke('vaultStatus')))throw Error('storage-receipt-required');return invoke('vaultEvict',{origin:syncOrigin});}
 export async function restore({legacy=false, expectedPack, signal, progress}={}){const s=await session();try{
  if(expectedPack && s.wnfs?.capsule !== expectedPack)throw Error('snapshot-basis-mismatch');
  if(s.wnfs&&!legacy){if(!wnfsEnabled)throw Error('recovery-required');return await wnfs.restore(s, { signal, progress });}
@@ -61,7 +65,7 @@ export async function restore({legacy=false, expectedPack, signal, progress}={})
  // Authenticate and validate all plaintext before staging or publishing output.
  await invoke('vaultRestoreBegin');for(const r of rows){if(r.bytes.length===0)await invoke('vaultRestoreWrite',{path:r.path,offset:0,bytes:''});for(let at=0;at<r.bytes.length;at+=65531)await invoke('vaultRestoreWrite',{path:r.path,offset:at,bytes:b64(r.bytes.subarray(at,at+65531))});r.bytes.fill(0);}await invoke('vaultRestorePublish');return {files:rows.length};
  }finally{s.secret.fill(0);}}
-export async function state(){const s=await invoke('vaultStatus');return {...s,canEvict:!wnfsEnabled&&!s.wnfs,legacyRestore:wnfsEnabled&&s.wnfs&&s.legacy,synced:s.synced&&s.origin===syncOrigin,configured};}
+export async function state(){const s=await invoke('vaultStatus');return {...s,canEvict:!wnfsEnabled&&!s.wnfs&&evictable(s),legacyRestore:wnfsEnabled&&s.wnfs&&s.legacy,synced:s.synced&&s.origin===syncOrigin,configured};}
 
 export async function inspectAuthorizedSnapshot(owner, expectedBasis, extension) {
  if(!wnfsEnabled)throw Error('recovery-required');
