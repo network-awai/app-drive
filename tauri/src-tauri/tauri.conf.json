@@ -23,6 +23,28 @@
     }
   },
   "bundle": {
-    "active": false
+    "active": true,
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "publisher": "GIFTED AGENT LLC",
+    "copyright": "Copyright © 2026 GIFTED AGENT LLC",
+    "category": "Productivity",
+    "shortDescription": "Awai Drive",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "hardenedRuntime": true,
+      "entitlements": "Entitlements.plist",
+      "infoPlist": "Info.plist",
+      "signingIdentity": null
+    }
   }
 }

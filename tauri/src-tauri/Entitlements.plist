@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for the Developer ID build of Awai Drive.
+  Intentionally empty. The app is not sandboxed, so outbound network needs no
+  com.apple.security.network.client entitlement, and the WKWebView JIT runs in
+  WebKit's own process. The login-Keychain items (`network.awai.drive.vault`,
+  see src/desktop_vault.rs) use the legacy file keychain, whose access is bound
+  to this app's designated requirement (Team ID + bundle ID), so no
+  keychain-access-groups entitlement or provisioning profile is needed.
+  See docs/macos-signing.md before adding an entitlement.
+-->
+<plist version="1.0">
+<dict/>
+</plist>

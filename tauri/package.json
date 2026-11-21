@@ -8,7 +8,8 @@
     "test": "node --test test/*.test.mjs",
     "tauri": "tauri",
     "build:android": "npm run build && tauri android build --apk --target aarch64",
-    "prebuild": "node scripts/check-platform.mjs && npm --prefix vendor/platform/awai-ui ci && npm --prefix vendor/platform/awai-ui run build"
+    "prebuild": "node scripts/check-platform.mjs && npm --prefix vendor/platform/awai-ui ci && npm --prefix vendor/platform/awai-ui run build",
+    "build:macos": "node scripts/build-macos.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "3.0.0-alpha.6",
