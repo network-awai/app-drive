@@ -145,6 +145,3 @@ npm ci && npm run build
 (cd src-tauri && cargo test --lib)
 npx tauri build --no-bundle   # binary: src-tauri/target/release/awai-drive
 ```
-
-For a signed `Awai Drive.app` and `.dmg` (Developer ID, hardened runtime, optional
-notarization), run `npm run build:macos`; see [macos-signing.md](docs/macos-signing.md).
