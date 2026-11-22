@@ -38,6 +38,7 @@ pub(crate) fn device_key(scope: &str, create: bool) -> Result<Option<SecKey>> {
             opts.set_key_type(KeyType::ec_sec_prime_random())
                 .set_size_in_bits(256)
                 .set_label(label)
+                .set_synchronizable(false)
                 .set_location(Location::FileKeychain(chain));
             SecKey::new(&opts)
                 .map(Some)
@@ -137,6 +138,49 @@ pub(crate) fn binding(key: &SecKey, link: &Value, request: &Value) -> Result<Val
 mod tests {
     use super::*;
     use p256::ecdsa::{signature::Verifier, VerifyingKey};
+
+    #[test]
+    #[ignore = "requires an unlocked macOS login Keychain"]
+    fn device_signing_key_stays_out_of_icloud_keychain() {
+        let scope = format!(
+            "network.awai.drive.keychain-test.{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let label = format!("{scope}.device-signing.v1");
+        struct Remove(String);
+        impl Drop for Remove {
+            fn drop(&mut self) {
+                // Both halves of the generated pair carry the label.
+                if let Ok(found) = ItemSearchOptions::new()
+                    .class(ItemClass::key())
+                    .label(&self.0)
+                    .limit(Limit::All)
+                    .load_refs(true)
+                    .search()
+                {
+                    for item in found {
+                        if let SearchResult::Ref(Reference::Key(key)) = item {
+                            let _ = key.delete();
+                        }
+                    }
+                }
+            }
+        }
+        let _remove = Remove(label.clone());
+        assert!(device_key(&scope, true).unwrap().is_some());
+        let chain = SecKeychain::default().unwrap();
+        crate::desktop_vault::tests::assert_device_only(
+            ItemSearchOptions::new()
+                .keychains(std::slice::from_ref(&chain))
+                .class(ItemClass::key())
+                .key_class(KeyClass::private())
+                .label(&label),
+        );
+        assert!(device_key(&scope, false).unwrap().is_some());
+    }
 
     #[test]
     fn signs_the_canonical_wnfs_claim_with_the_linked_device_key() {

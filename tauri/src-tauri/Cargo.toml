@@ -18,7 +18,9 @@ base64 = "0.23"
 bs58 = "0.5"
 p256 = "0.13"
 getrandom = "0.4"
-security-framework = "3.7"
+security-framework = { version = "3.7", features = ["sync-keychain"] }
+security-framework-sys = "2.17"
+core-foundation = "0.10"
 serde = { version = "1", features = ["derive"] }
 zeroize = "1"
 sha2 = "0.10"

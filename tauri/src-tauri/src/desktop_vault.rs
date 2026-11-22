@@ -6,7 +6,21 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
+use core_foundation::{
+    base::{CFType, TCFType},
+    boolean::CFBoolean,
+    data::CFData,
+    dictionary::CFDictionary,
+    string::CFString,
+};
 use security_framework::os::macos::keychain::SecKeychain;
+use security_framework_sys::{
+    item::{
+        kSecAttrAccount, kSecAttrService, kSecAttrSynchronizable, kSecClass,
+        kSecClassGenericPassword, kSecUseKeychain, kSecValueData,
+    },
+    keychain_item::SecItemAdd,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -33,6 +47,56 @@ const AAD: &[u8] = b"awai.drive.macos.wnfs.v1";
 const KEY_ACCOUNT: &str = "wnfs-device-v1";
 const KEYCHAIN_ITEM_NOT_FOUND: i32 = -25300;
 type Result<T> = std::result::Result<T, String>;
+
+/// Attributes of the vault key item. It stays in this Mac's login Keychain:
+/// kSecAttrSynchronizable is false, so it never joins iCloud Keychain.
+fn vault_key_attributes(
+    chain: Option<&SecKeychain>,
+    service: &str,
+    account: &str,
+    key: &[u8],
+) -> CFDictionary<CFString, CFType> {
+    let mut pairs = unsafe {
+        vec![
+            (
+                CFString::wrap_under_get_rule(kSecClass),
+                CFString::wrap_under_get_rule(kSecClassGenericPassword).into_CFType(),
+            ),
+            (
+                CFString::wrap_under_get_rule(kSecAttrService),
+                CFString::new(service).into_CFType(),
+            ),
+            (
+                CFString::wrap_under_get_rule(kSecAttrAccount),
+                CFString::new(account).into_CFType(),
+            ),
+            (
+                CFString::wrap_under_get_rule(kSecAttrSynchronizable),
+                CFBoolean::false_value().into_CFType(),
+            ),
+            (
+                CFString::wrap_under_get_rule(kSecValueData),
+                CFData::from_buffer(key).into_CFType(),
+            ),
+        ]
+    };
+    if let Some(chain) = chain {
+        pairs.push((
+            unsafe { CFString::wrap_under_get_rule(kSecUseKeychain) },
+            chain.as_CFType(),
+        ));
+    }
+    CFDictionary::from_CFType_pairs(&pairs)
+}
+
+/// Adds the item; an existing item is never overwritten.
+fn add_device_only(chain: &SecKeychain, service: &str, account: &str, key: &[u8]) -> Result<()> {
+    let attributes = vault_key_attributes(Some(chain), service, account, key);
+    match unsafe { SecItemAdd(attributes.as_concrete_TypeRef(), std::ptr::null_mut()) } {
+        0 => Ok(()),
+        _ => Err("keychain-unavailable".into()),
+    }
+}
 
 fn io(error: std::io::Error) -> String {
     match error.kind() {
@@ -333,9 +397,7 @@ impl Vault {
                     return Ok(None);
                 }
                 let key = Zeroizing::new(random::<64>()?.to_vec());
-                chain
-                    .add_generic_password(&self.service, KEY_ACCOUNT, &key)
-                    .map_err(|_| "keychain-unavailable")?;
+                add_device_only(&chain, &self.service, KEY_ACCOUNT, &key)?;
                 Ok(Some(key))
             }
             _ => Err("keychain-unavailable".into()),
@@ -740,7 +802,7 @@ impl Vault {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     struct Scratch(PathBuf);
@@ -815,6 +877,52 @@ mod tests {
     }
 
     #[test]
+    fn vault_key_is_added_as_a_device_only_item() {
+        let attributes = vault_key_attributes(None, "svc", KEY_ACCOUNT, &[7; 64]);
+        let get = |name| unsafe {
+            attributes
+                .find(CFString::wrap_under_get_rule(name))
+                .map(|value| value.clone())
+        };
+        let sync = unsafe { get(kSecAttrSynchronizable) }.expect("synchronizable is explicit");
+        assert_eq!(sync.downcast::<CFBoolean>(), Some(CFBoolean::false_value()));
+        assert!(unsafe { get(kSecValueData) }.is_some());
+    }
+
+    /// The item matches a non-synchronized search and has no synchronizable
+    /// attribute set. A synchronized search finds nothing: the file-based login
+    /// Keychain cannot hold such items and refuses the query (errSecParam, -50).
+    pub(crate) fn assert_device_only(search: &mut security_framework::item::ItemSearchOptions) {
+        use security_framework::item::{CloudSync, SearchResult};
+        let found = search
+            .cloud_sync(CloudSync::MatchSyncNo)
+            .load_attributes(true)
+            .search()
+            .unwrap();
+        assert!(!found.is_empty());
+        for item in found {
+            let SearchResult::Dict(attributes) = item else {
+                panic!("attributes expected")
+            };
+            let attributes = SearchResult::Dict(attributes).simplify_dict().unwrap();
+            assert!(matches!(
+                attributes.get("sync").map(String::as_str),
+                None | Some("0")
+            ));
+        }
+        let synchronized = search
+            .cloud_sync(CloudSync::MatchSyncYes)
+            .load_attributes(false)
+            .search()
+            .map(|_| ())
+            .map_err(|error| error.code());
+        assert!(matches!(
+            synchronized,
+            Err(-50) | Err(KEYCHAIN_ITEM_NOT_FOUND)
+        ));
+    }
+
+    #[test]
     #[ignore = "requires an unlocked macOS login Keychain"]
     fn keychain_unlock_survives_vault_restart() {
         struct KeychainEntry(String);
@@ -849,6 +957,18 @@ mod tests {
         let session = vault.call(&local, "vaultSession", &json!({})).unwrap();
         assert!(session["secret"] == first["secret"]);
         assert_eq!(session["record"], "test owner envelope");
+        {
+            use security_framework::item::{ItemClass, ItemSearchOptions};
+            let chain = SecKeychain::default().unwrap();
+            let service = format!("{bundle}.vault");
+            assert_device_only(
+                ItemSearchOptions::new()
+                    .keychains(std::slice::from_ref(&chain))
+                    .class(ItemClass::generic_password())
+                    .service(&service)
+                    .account(KEY_ACCOUNT),
+            );
+        }
 
         // The Keychain-sealed control record keeps only the current root's receipt.
         let commit = |capsule: &str, receipt: Value| {
