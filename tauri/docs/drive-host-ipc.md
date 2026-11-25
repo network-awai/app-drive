@@ -248,6 +248,7 @@ Response {
 
 - `put` は `{ path, size, cid, sha256, e2eePolicy, dataHandle }` を送る。**bytes は seal 済みの暗号文 block** で、`cid` と `sha256` は**暗号文**を対象とする。`e2eePolicy` は client の宣言で、host は**監査記録に残すだけ**（§9）。host は平文も E2EE 鍵も持たないので、復号も再暗号化もしない。**受信した bytes から CID を再計算し、申告 `cid` と一致しなければ `cid-mismatch` で拒否する**（`sha256` は補助で、CID の digest と一致させる）。
 - `put` は **`size <= 262,144`（256 KiB、WNFS block 上限）**を強制し、申告 `size` と実 bytes の一致も強制する。超過は **`too-large`**（quota の `no-space` と混ぜない）。
+- `put` の応答は `epoch` と `membershipDigest`（更新後）を返す。host は CID の検証と membership の追加を、ack の前に確定する。
 - **`dataHandle` は regular file、または pipe / socketpair**を許可する。fd は `fstat` で **`S_ISREG` / `S_ISFIFO` / `S_ISSOCK`** を許可し、**directory / block device / char device / symlink を拒否**する。**`O_NOFOLLOW` は path から open する場合の条件**で、fd を受ける経路では条件にしない（fd の種類検査と分離する）。Windows の `data-open` は **pipe frame の id** であり、file ではない。
 - `get` は fd / stream を渡す**前に** block の CID を検証し、不一致なら返さない（`awai-disk-format.md` §7.3 の scrub と同じ規則）。返すのは **membership または closure set の CID** だけである。
 - namespace の認可は、`clientId` に結び付いた **namespace capability**（§6.1。将来は W4 の write proof）で行う。capability を検証したら、CID が **membership** に無ければ追加する（closure set への事前登録は不要）。別 client が所有する CID は **`closure-conflict`**。path や CID の自己申告だけでは認可しない。
