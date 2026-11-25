@@ -163,9 +163,11 @@ test('Drive only commits WNFS after all readbacks, and restores into a staged co
     },
     async compute(operation) {
       if (operation === 'seal') return {
+        basis: 'b-sealed',
         packs: [Uint8Array.of(1), Uint8Array.of(2)],
         capsule: { root: 'a'.repeat(64), bytes: Uint8Array.of(3) }
       };
+      if (operation === 'verify') return { basis: 'b-sealed', inventory: [{ path: media.path, directory: false, size: media.size, sha256: media.sha256 }] };
       return [{ path: media.path, chunks: [bytes.slice()] }];
     }
   });
@@ -181,6 +183,155 @@ test('Drive only commits WNFS after all readbacks, and restores into a staged co
   const count = nativeOps.length;
   assert.deepEqual(await sync.restore({ wnfs: head }), { folder: 'Recovered test' });
   assert.deepEqual(nativeOps.slice(count), ['vaultWnfsRestoreBegin', 'vaultWnfsRestoreWrite', 'vaultWnfsRestorePublish']);
+});
+
+test('sync does not commit a sealed snapshot it cannot re-open', async () => {
+  const { createWnfsSync } = await import('../src/wnfs-sync.js');
+  const { createDrivePackClient } = await import('../vendor/platform/drive-packs.mjs');
+  const origin = 'https://storage.example';
+  const bytes = Uint8Array.of(7, 8, 9);
+  const media = { path: 'media.mp4', size: bytes.length, sha256: sha(bytes), directory: false };
+  const transport = new Map();
+  const ops = [];
+  let verify;
+  const broker = { async invoke({ operation }, { input, init }) {
+    const id = new URL(input).pathname.split('/').at(-1);
+    if (operation === 'upload') {
+      transport.set(id, init.body.slice());
+      return Response.json({ sha256: id, bytes: init.body.length });
+    }
+    return new Response(transport.get(id));
+  } };
+  const sync = createWnfsSync({
+    origin,
+    packs: createDrivePackClient({ origin, capability: 'awai.drive.sync', broker, sha256: sha }),
+    sha256: sha,
+    async invoke(op, args) {
+      ops.push(op);
+      if (op === 'vaultWnfsRecipients') return { revision: 0, items: {} };
+      if (op === 'vaultWnfsInventory') return { entries: [media] };
+      if (op === 'vaultRead') return { bytes: Buffer.from(bytes).toString('base64') };
+    },
+    async compute(operation) {
+      if (operation === 'seal') return {
+        basis: 'b-sealed',
+        packs: [Uint8Array.of(1)],
+        capsule: { root: 'a'.repeat(64), bytes: Uint8Array.of(3) }
+      };
+      if (operation === 'verify') return verify;
+      throw Error('unexpected-op');
+    }
+  });
+
+  verify = { basis: 'b-other', files: 1 };
+  await assert.rejects(sync.sync({}), /sealed-snapshot-unverifiable/);
+  assert.equal(ops.includes('vaultWnfsCommit'), false);
+  verify = null;
+  await assert.rejects(sync.sync({}), /sealed-snapshot-unverifiable/);
+  assert.equal(ops.includes('vaultWnfsCommit'), false);
+  // Content mismatches against the vault inventory must not commit either:
+  // a missing file, different content, or an extra entry.
+  const matching = [{ path: media.path, directory: false, size: media.size, sha256: media.sha256 }];
+  verify = { basis: 'b-sealed', inventory: [] };
+  await assert.rejects(sync.sync({}), /sealed-snapshot-inventory-mismatch/);
+  assert.equal(ops.includes('vaultWnfsCommit'), false);
+  verify = { basis: 'b-sealed', inventory: [{ ...matching[0], sha256: '0'.repeat(64) }] };
+  await assert.rejects(sync.sync({}), /sealed-snapshot-inventory-mismatch/);
+  assert.equal(ops.includes('vaultWnfsCommit'), false);
+  verify = { basis: 'b-sealed', inventory: [...matching, { path: 'extra.txt', directory: false, size: 1, sha256: sha(Uint8Array.of(1)) }] };
+  await assert.rejects(sync.sync({}), /sealed-snapshot-inventory-mismatch/);
+  assert.equal(ops.includes('vaultWnfsCommit'), false);
+  verify = { basis: 'b-sealed', inventory: matching };
+  await sync.sync({});
+  assert.equal(ops.includes('vaultWnfsCommit'), true);
+
+  const failing = createWnfsSync({
+    origin,
+    packs: createDrivePackClient({ origin, capability: 'awai.drive.sync', broker, sha256: sha }),
+    sha256: sha,
+    async invoke(op) {
+      if (op !== 'vaultWnfsCommit') ops.push(op);
+      if (op === 'vaultWnfsRecipients') return { revision: 0, items: {} };
+      if (op === 'vaultWnfsInventory') return { entries: [media] };
+      if (op === 'vaultRead') return { bytes: Buffer.from(bytes).toString('base64') };
+    },
+    async compute(operation) {
+      if (operation === 'seal') return {
+        basis: 'b-sealed',
+        packs: [Uint8Array.of(1)],
+        capsule: { root: 'a'.repeat(64), bytes: Uint8Array.of(3) }
+      };
+      throw Error('invalid-wnfs-snapshot');
+    }
+  });
+  ops.length = 0;
+  await assert.rejects(failing.sync({}), /invalid-wnfs-snapshot/);
+  assert.equal(ops.includes('vaultWnfsCommit'), false);
+});
+
+test('the real worker verify re-opens a sealed snapshot and reports its inventory', { skip: !wnfsEnabled }, async () => {
+  const vm = await import('node:vm');
+  const { TextEncoder, TextDecoder } = await import('node:util');
+  const { readFileSync } = await import('node:fs');
+  const posted = [];
+  const sandbox = { console, crypto: globalThis.crypto, performance, TextEncoder, TextDecoder,
+    atob: globalThis.atob, btoa: globalThis.btoa };
+  sandbox.self = sandbox;
+  sandbox.window = sandbox;
+  sandbox.postMessage = message => posted.push(message);
+  sandbox.importScripts = url => vm.runInContext(
+    readFileSync(new URL(`../generated/${url.slice(2)}`, import.meta.url), 'utf8'), sandbox);
+  vm.createContext(sandbox);
+  vm.runInContext(await readFile(new URL('../generated/wnfs-core.js', import.meta.url), 'utf8'), sandbox);
+  vm.runInContext(await readFile(new URL('../src/wnfs-worker.js', import.meta.url), 'utf8'), sandbox);
+  assert.equal(typeof sandbox.self.onmessage, 'function');
+  const runOp = async data => {
+    posted.length = 0;
+    await sandbox.self.onmessage({ data });
+    assert.equal(posted.length, 1);
+    if (posted[0].error) throw Error(posted[0].error);
+    return posted[0].result;
+  };
+  const CUint8Array = vm.runInContext('Uint8Array', sandbox);
+  const u8 = bytes => new CUint8Array(bytes);
+  // CLJS array? is realm-local: arrays crossing into the sandbox must be
+  // created there, like the structured-clone boundary in production.
+  const arr = items => {
+    const created = vm.runInContext('[]', sandbox);
+    for (const item of items) created.push(item);
+    return created;
+  };
+  const unlock = crypto.getRandomValues(new Uint8Array(32));
+  const record = await globalThis.AwaiDriveEncrypted.newRecord(unlock);
+  const rows = [
+    { path: 'photos/cat.jpg', bytes: Uint8Array.of(9, 8, 7) },
+    { path: 'notes.txt', bytes: Uint8Array.of(1, 2) },
+    { path: 'empty', directory: true }
+  ];
+  try {
+    const sealed = await runOp({
+      operation: 'seal', record, secret: u8(Array.from(unlock)),
+      rows: arr(rows.map(row => row.directory ? { ...row } : { ...row, bytes: u8(Array.from(row.bytes)) })),
+      recipients: arr([])
+    });
+    assert.equal(typeof sealed.basis, 'string');
+    const verified = JSON.parse(JSON.stringify(await runOp({
+      operation: 'verify', record, secret: u8(Array.from(unlock)),
+      root: sealed.capsule.root, capsule: sealed.capsule.bytes, packs: sealed.packs
+    })));
+    assert.equal(verified.basis, sealed.basis);
+    const expected = new Map([
+      ['photos', { path: 'photos', directory: true }],
+      ['photos/cat.jpg', { path: 'photos/cat.jpg', directory: false, size: 3, sha256: sha(Uint8Array.of(9, 8, 7)) }],
+      ['notes.txt', { path: 'notes.txt', directory: false, size: 2, sha256: sha(Uint8Array.of(1, 2)) }],
+      ['empty', { path: 'empty', directory: true }]
+    ]);
+    const actual = new Map(verified.inventory.map(item => [item.path, item]));
+    assert.equal(actual.size, expected.size);
+    for (const [path, item] of expected) assert.deepEqual(actual.get(path), item);
+  } finally {
+    unlock.fill(0);
+  }
 });
 
 test('account catalog requires bound sources and reports only verified snapshot metadata', async () => {
@@ -245,4 +396,48 @@ test('account catalog requires bound sources and reports only verified snapshot 
   denied = ids('e');
   await assert.rejects(wnfs.catalogAuthorizedAccount({ subject, sources: grants }), /operation-denied/);
   assert.deepEqual(requests, [ids('b'), ids('c'), ids('e')]);
+});
+
+test('seal admits exactly the snapshots open accepts: 1,000 forest rows, counting parent directories', { skip: !wnfsEnabled }, async () => {
+  const { AwaiDriveEncrypted: legacy, AwaiDriveWnfs: wnfs } = globalThis;
+  const unlock = crypto.getRandomValues(new Uint8Array(32));
+  const identity = await legacy.newRecord(unlock);
+  const file = i => ({ path: `f${String(i).padStart(4, '0')}.txt`, bytes: Uint8Array.of(i % 251) });
+  const flat = n => Array.from({ length: n }, (_, i) => file(i));
+  const nested = n => Array.from({ length: n }, (_, i) =>
+    ({ path: `d/f${String(i).padStart(4, '0')}.txt`, bytes: Uint8Array.of(i % 251) }));
+  const deep = n => Array.from({ length: n }, (_, i) =>
+    ({ path: `d${String(i).padStart(4, '0')}/e/f.txt`, bytes: Uint8Array.of(i % 251) }));
+  const roundtrip = async rows => {
+    const sealed = await wnfs.seal(identity, unlock, rows);
+    const snapshot = await wnfs.openSnapshot(identity, unlock, sealed.capsule.root, sealed.capsule.bytes, sealed.packs);
+    assert.equal(snapshot.basis, sealed.basis);
+    return snapshot.rows;
+  };
+  try {
+    // Flat boundary: 999 and 1,000 forest rows roundtrip; 1,001 is refused at seal.
+    assert.equal((await roundtrip(flat(999))).length, 999);
+    assert.equal((await roundtrip(flat(1000))).length, 1000);
+    await assert.rejects(wnfs.seal(identity, unlock, flat(1001)), /invalid-wnfs-snapshot/);
+    // One synthesized parent directory: 999 files make 1,000 forest rows and
+    // roundtrip; 1,000 files would make 1,001 and must be refused at seal,
+    // never sealed-then-unopenable.
+    assert.equal((await roundtrip(nested(999))).length, 1000);
+    await assert.rejects(wnfs.seal(identity, unlock, nested(1000)), /invalid-wnfs-snapshot/);
+    await assert.rejects(wnfs.seal(identity, unlock, nested(1001)), /invalid-wnfs-snapshot/);
+    // Two synthesized parents per file: 333 files make 999 forest rows.
+    assert.equal((await roundtrip(deep(333))).length, 999);
+    await assert.rejects(wnfs.seal(identity, unlock, deep(334)), /invalid-wnfs-snapshot/);
+    // An explicit parent directory row is redundant with the synthesized
+    // parent and does not add a forest row.
+    const withParent = [...nested(999), { path: 'd', directory: true }];
+    assert.equal((await roundtrip(withParent)).length, 1000);
+    // An explicit empty directory is a real forest row.
+    const withEmpty = [...flat(999), { path: 'empty', directory: true }];
+    const restored = await roundtrip(withEmpty);
+    assert.equal(restored.length, 1000);
+    assert.equal(restored.find(row => row.path === 'empty').directory, true);
+  } finally {
+    unlock.fill(0);
+  }
 });

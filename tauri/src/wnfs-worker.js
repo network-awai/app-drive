@@ -12,6 +12,11 @@ self.onmessage = async ({ data: { operation, record, secret, rows, root, capsule
       self.postMessage({ result }, [result.capsule.bytes.buffer, ...result.packs.map(bytes => bytes.buffer), ...result.grants.map(g => g.capsule.bytes.buffer)]);
     } else if (operation === 'catalog') {
       self.postMessage({ result: await self.AwaiDriveWnfs.catalog(record, secret, root, capsule, packs) });
+    } else if (operation === 'verify') {
+      const snapshot = await self.AwaiDriveWnfs.openSnapshot(record, secret, root, capsule, packs);
+      const verified = self.AwaiDriveWnfs.inventory(snapshot.rows);
+      for (const row of snapshot.rows) for (const bytes of row.chunks || []) bytes.fill(0);
+      self.postMessage({ result: { basis: snapshot.basis, inventory: verified } });
     } else if (operation === 'open' || operation === 'inspect' || operation === 'open-share') {
       const snapshot = await self.AwaiDriveWnfs.openSnapshot(record, secret, root, capsule, packs);
       const started = performance.now();
