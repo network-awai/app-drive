@@ -10,13 +10,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static PICKER_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// RAII reset of `PICKER_ACTIVE`, owned by the main-thread closure: the flag
-/// is released when the closure scope exits — after the modal dialog has
-/// closed on the execute path, and during unwinding if it panics. It is NOT
-/// released by `pick()` dropping its future, so a second picker can never open
-/// while this dialog is still up. If the closure is retained but never
-/// executed, `recv()` waits forever; that state stays visible (flag set)
-/// rather than silently letting another picker through.
+/// RAII reset of `PICKER_ACTIVE`. The guard is created in `pick()` and moved
+/// into the main-thread closure, so the flag releases when the closure falls
+/// on every path: after the modal dialog closes, when the closure is dropped
+/// without ever running (teardown), when it panics, or when scheduling it
+/// fails (the closure is dropped by the failed call). Releasing early — when
+/// `pick()`'s future is dropped — would let a second picker open while this
+/// dialog is still up, so the guard is NOT owned by the future. If the closure
+/// is retained but never executed, `recv()` waits forever; that state stays
+/// visible (flag set) rather than silently letting another picker through.
 struct PickerGuard;
 
 impl Drop for PickerGuard {
@@ -43,15 +45,16 @@ fn choose() -> Result<PathBuf, String> {
     Ok(PathBuf::from(OsStr::from_bytes(bytes.to_bytes())))
 }
 
-/// Run `do_choose` under `PickerGuard` and forward its result. The guard
-/// lives for this closure's whole scope, so dropping the receiving side (e.g.
-/// the `pick()` future) changes nothing: the flag still releases when the
-/// scope exits, and a failed send is ignored.
+/// Run `do_choose` under the moved-in `PickerGuard` and forward its result.
+/// The guard lives for this closure's whole scope, so dropping the receiving
+/// side (e.g. the `pick()` future) changes nothing: the flag still releases
+/// when the scope exits, and a failed send is ignored.
 fn run_selection_with<G: FnOnce() -> Result<PathBuf, String>>(
+    guard: PickerGuard,
     do_choose: G,
     send: std::sync::mpsc::Sender<Result<PathBuf, String>>,
 ) {
-    let _guard = PickerGuard;
+    let _guard = guard;
     let selected = do_choose();
     let _ = send.send(selected);
 }
@@ -61,15 +64,15 @@ pub async fn pick(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         return Err("file-busy".into());
     }
     let (send, receive) = std::sync::mpsc::channel();
+    let guard = PickerGuard;
     if app
         .run_on_main_thread(move || {
-            run_selection_with(choose, send);
+            run_selection_with(guard, choose, send);
         })
         .is_err()
     {
-        // The closure was never scheduled, so no dialog can be open: release
-        // the flag directly.
-        PICKER_ACTIVE.store(false, Ordering::Release);
+        // The failed call drops the closure, which drops `guard` and releases
+        // the flag; no dialog can have opened.
         return Err("import-unavailable".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
@@ -108,6 +111,7 @@ mod tests {
         assert_eq!(claim(), false);
         let (send, receive) = mpsc::channel();
         run_selection_with(
+            PickerGuard,
             || {
                 assert!(flag(), "flag must stay set while the dialog is open");
                 assert_eq!(claim(), true, "second picker must be blocked");
@@ -121,7 +125,7 @@ mod tests {
         // Cancel path: an Err from the dialog also releases at scope exit.
         assert_eq!(claim(), false);
         let (send, receive) = mpsc::channel();
-        run_selection_with(|| Err("import-cancelled".to_string()), send);
+        run_selection_with(PickerGuard, || Err("import-cancelled".to_string()), send);
         assert_eq!(flag(), false);
         assert_eq!(receive.recv().unwrap(), Err("import-cancelled".to_string()));
 
@@ -131,14 +135,26 @@ mod tests {
         assert_eq!(claim(), false);
         let (send, _future) = mpsc::channel();
         drop(_future);
-        run_selection_with(|| Ok(PathBuf::from("/tmp/sample.bin")), send);
+        run_selection_with(PickerGuard, || Ok(PathBuf::from("/tmp/sample.bin")), send);
         assert_eq!(flag(), false, "flag releases even when the future is dropped");
+
+        // (c) Closure dropped before ever running (teardown path): the
+        // session is over, recv will never answer, and the flag must still
+        // release so later imports are not file-busy forever.
+        assert_eq!(claim(), false);
+        let (send, _receive) = mpsc::channel();
+        let guard = PickerGuard;
+        let closure = move || {
+            run_selection_with(guard, || Ok(PathBuf::from("/tmp/sample.bin")), send);
+        };
+        drop(closure);
+        assert_eq!(flag(), false, "flag releases when the closure is dropped");
 
         // Panic path: the guard releases during unwinding.
         assert_eq!(claim(), false);
         let (send, receive) = mpsc::channel();
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_selection_with(|| panic!("dialog blew up"), send);
+            run_selection_with(PickerGuard, || panic!("dialog blew up"), send);
         }));
         assert_eq!(flag(), false, "flag releases on panic");
         drop(receive);
