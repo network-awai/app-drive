@@ -34,7 +34,11 @@ this deletion.
   `babashka.http-client` is synchronous, so the store/handlers are synchronous.
   The graph topology and external behavior are unchanged.
 - **Server.** FastAPI decorators → a single pure `route` fn + a babashka-httpkit
-  ring adapter (`-main` / `kbb -M:serve`). Same 8 routes, same `x-api-key` enforcement.
+  ring adapter (`-main` / `kbb -M:serve`). The route paths are kept, with two
+  behavior differences: `filesCreate` / `filesUpdate` / `filesDelete` are retired
+  (410, the handler is not called), and `x-api-key` is required on every xrpc
+  method (401 when no key is configured, or when the supplied key is missing or
+  mismatched). `GET /health` and `GET /ok` still take no key.
 - **Wire vs attr keys.** Wire/JSON `file` maps keep STRING keys (faithful to the
   JSON surface + the Python tests); `:drive/*` attr maps use keyword keys.
 

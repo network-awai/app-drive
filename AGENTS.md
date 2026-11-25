@@ -33,11 +33,15 @@ atproto catch-all actor:true → pipethroughActorWorker → drive.etzhayyim.com/
 |---|---|---|
 | `filesList` | files.list | GET /me/drive/{root,items/{id}}/children |
 | `filesGet` | files.get | GET /me/drive/items/{id} |
-| `filesCreate` | files.create | POST /me/drive/items/{parent}/children |
-| `filesUpdate` | files.update (patch) | PATCH /me/drive/items/{id} |
-| `filesDelete` | files.delete | DELETE /me/drive/items/{id} |
+| `filesCreate` (retired: 410) | files.create | POST /me/drive/items/{parent}/children |
+| `filesUpdate` (retired: 410) | files.update (patch) | PATCH /me/drive/items/{id} |
+| `filesDelete` (retired: 410) | files.delete | DELETE /me/drive/items/{id} |
 | `about` | about.get | GET /me/drive |
 | `changes` | changes.list | GET /me/drive/root/delta |
+
+Retired: with a valid `x-api-key`, the lg-drive server answers `filesCreate` / `filesUpdate` /
+`filesDelete` with 410 and does not call the handler. Every xrpc method requires `x-api-key`
+(no configured key = 401). `GET /health` and `GET /ok` take no key.
 
 Lexicons: `00-contracts/lexicons/ai/etzhayyim/apps/drive/` (`defs.json` file/about/change superset).
 Join key `:drive/sha256` (Google `sha256Checksum` == MS `file.hashes.sha256Hash`).

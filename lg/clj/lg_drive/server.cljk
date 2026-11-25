@@ -5,13 +5,19 @@
   forwards to (drive.etzhayyim.com/xrpc/... → lg-drive:8000/xrpc/...):
 
     GET  /health /ok
-    POST /xrpc/ai.etzhayyim.apps.drive.filesCreate
+    POST /xrpc/ai.etzhayyim.apps.drive.filesCreate  (retired: 410)
     GET  /xrpc/ai.etzhayyim.apps.drive.filesGet
     GET  /xrpc/ai.etzhayyim.apps.drive.filesList
-    POST /xrpc/ai.etzhayyim.apps.drive.filesUpdate
-    POST /xrpc/ai.etzhayyim.apps.drive.filesDelete
+    POST /xrpc/ai.etzhayyim.apps.drive.filesUpdate  (retired: 410)
+    POST /xrpc/ai.etzhayyim.apps.drive.filesDelete  (retired: 410)
     GET  /xrpc/ai.etzhayyim.apps.drive.about
     GET  /xrpc/ai.etzhayyim.apps.drive.changes
+
+  filesCreate / filesUpdate / filesDelete answer 410 and never enter a handler.
+  x-api-key is required on every xrpc method: no configured key (nil or blank)
+  is 401, and so is a missing or mismatched supplied key. The key is checked
+  first, so a retired method without a valid key is 401, not 410. GET /health
+  and GET /ok take no key.
 
   FastAPI → babashka httpkit; pydantic body → cheshire JSON. Persistence =
   kotoba datomic (graph `drive-v1`). `route` is a pure dispatch fn (store, request)
