@@ -9,33 +9,43 @@
 //                                       (first 64 B, FIPS 203 deterministic
 //                                       keygen d||z) + X25519 scalar (last 32 B,
 //                                       RFC 7748 clamped before pub derivation)
-//   device-registration   32 B        registering a new device after total loss
-//   owner-pseudonym       32 B        per-person pseudonym
+//   device-registration   32 B        registration keypair material (§3.5):
+//                                       seed -> Ed25519 secret key; the public
+//                                       key is what a fresh device registers
+//   owner-pseudonym       32 B        SHA-256("awai-drive/v1/owner" ||
+//                                       registration public key) — the
+//                                       per-person pseudonym; public key only
 //   head/name             32 B        public head name (never reveals sign-root)
 //   head/sign-root        32 B        signing-root material
 //
 // The 96 B single HKDF output for `recovery-recipient` is split at call time;
 // there is no separate `recovery-recipient/x25519-scalar` label.
 //
-// Shamir 2-of-3 over GF(2^8), poly 0x11b. Shares are versioned envelopes:
+// Shamir 2-of-3 lives in ./internal/shamir.js (INTERNAL, not exported by this
+// module, never bundled). Shares are versioned envelopes:
 // { version: 1, setId: 16 B, id: 1..3, data: 32 B, checksum: 32 B } with
-// checksum = SHA-256(0x01 || setId || id || data). combine23 validates every
-// envelope, rejects mismatched sets/duplicates/out-of-range ids, needs 2 shares
-// and — when a 3rd is supplied — checks it lies on the same line (consistency).
-// combineAndVerify additionally compares the recovered seed's recipient
-// fingerprint (SHA-256 of ML-KEM ek || X25519 pub, the `kv1:` fingerprint) to
-// the registration-time value and refuses on mismatch.
+// checksum = SHA-256(0x01 || setId || id || data). That checksum is UNKEYED:
+// it detects accidental corruption only — anyone can recompute it, so it is
+// not forgery protection. Forgery resistance comes from combineAndVerify.
+//
+// Fingerprint provenance (decision, binding for callers): when every device
+// is lost, the expectedFingerprint used by combineAndVerify must come from
+// owner-held offline material written at registration time — the fingerprint
+// is printed on the share/paper artifacts themselves. It must never be
+// fetched from a server, bot, or any network source at restore time: an
+// attacker-supplied fingerprint nullifies the check (they can supply their
+// own key's fingerprint and the wrong seed passes). The restore device
+// reads the fingerprint from the paper with the shares, compares, and
+// refuses on mismatch before touching any pack id. This module only checks
+// equality; it cannot tell where a caller obtained the value, so callers
+// must source it from the owner-held artifact.
 //
 // Shamir randomness: production splitSecret23 uses only crypto.getRandomValues
-// (CSPRNG). There is no options/rng/deterministic hook. The pure
-// splitWithCoefficient(secret, coef, setId) below exists so that TESTS can
-// construct known-coefficient splits; production callers must use
-// splitSecret23, which samples coefficients itself. A caller that can supply
-// the coefficient can recover the seed from a single share — that is exactly
-// why it is not part of the production API surface.
+// (CSPRNG). There is no options/rng/deterministic hook anywhere in this
+// module. Deterministic test randomness lives in test/ only.
 //
 // Dependencies kept from the audited noble libraries: HKDF/SHA-256 from
-// @noble/hashes, ML-KEM-768 from @noble/post-quantum, X25519 from
+// @noble/hashes, ML-KEM-768 from @noble/post-quantum, X25519 + Ed25519 from
 // @noble/curves. The GF(256) Shamir core is self-made because no audited
 // library exposes it; it is ~40 lines of pure arithmetic, exhaustively tested
 // (all 256 coefficient values per share byte prove one share gives no seed
@@ -44,11 +54,13 @@
 // Secret handling (wiping policy): every Uint8Array that holds a seed,
 // coefficient, share data, or derived private material must be zero-filled
 // with wipeSecret() once its last use is done (finally-style). This module
-// wipes intermediates it owns (coefficients, interpolated buffers on error);
-// returned buffers (seed, recipient privates, shares) are caller-owned —
-// wipe them when finished. JS cannot guarantee memory is not relocated by the
-// GC; wiping bounds the lifetime to the scope that needed the value, which is
-// the strongest guarantee available in the WebView runtime.
+// wipes intermediates it owns (coefficients, HKDF material copies, seeds on
+// every failure path); returned buffers (seed, recipient privates, shares)
+// are caller-owned — wipe them when finished. JS cannot guarantee memory is
+// not relocated by the GC; wiping bounds the lifetime to the scope that
+// needed the value, which is the strongest guarantee available in the
+// WebView runtime. Paper/share loss or theft re-registration is a design-doc
+// matter and is deliberately not implemented here.
 //
 // Timing policy: no secret-dependent branches. gfMul runs a fixed 8 iterations
 // regardless of operand bits; gfPow/gfInv run fixed iteration counts; byte
@@ -68,13 +80,11 @@
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha256.js';
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
-import { x25519 } from '@noble/curves/ed25519.js';
+import { x25519, ed25519 } from '@noble/curves/ed25519.js';
+import { splitWithCoefficient, combine23 } from './internal/shamir.js';
 
 const LABEL_PREFIX = 'awai-drive/v1/';
-const SHARE_VERSION = 1;
-const SHARE_ID_MIN = 1;
-const SHARE_ID_MAX = 3;
-const SHARE_DATA_LEN = 32;
+const OWNER_PSEUDONYM_PREFIX = 'awai-drive/v1/owner';
 const SET_ID_LEN = 16;
 
 function utf8(s) {
@@ -138,15 +148,20 @@ function deriveRecipient(seed) {
   const material = derive(seed, 'recovery-recipient', 96);
   const coins = material.slice(0, 64);
   const scalar = material.slice(64, 96);
-  const kp = ml_kem768.keygen(coins);
-  const priv = Uint8Array.from(scalar);
-  // RFC 7748 clamping: clear low 3 bits, clear top bit, set bit 6.
-  priv[0] &= 248;
-  priv[31] &= 127;
-  priv[31] |= 64;
-  const pub = x25519.getPublicKey(priv);
-  wipeSecret(material);
-  return { publicKey: kp.publicKey, secretKey: kp.secretKey, x25519Priv: priv, x25519Pub: pub };
+  try {
+    const kp = ml_kem768.keygen(coins);
+    const priv = Uint8Array.from(scalar);
+    // RFC 7748 clamping: clear low 3 bits, clear top bit, set bit 6.
+    priv[0] &= 248;
+    priv[31] &= 127;
+    priv[31] |= 64;
+    const pub = x25519.getPublicKey(priv);
+    return { publicKey: kp.publicKey, secretKey: kp.secretKey, x25519Priv: priv, x25519Pub: pub };
+  } finally {
+    wipeSecret(coins);
+    wipeSecret(scalar);
+    wipeSecret(material);
+  }
 }
 
 // Registration fingerprint: SHA-256 of both public keys (kv1: fingerprint).
@@ -158,8 +173,25 @@ function deriveDeviceReg(seed) {
   return derive(seed, 'device-registration', 32);
 }
 
+// Device-registration public key: Ed25519 pub of the registration material.
+// The 32 B derived value is the Ed25519 secret key; publish only the pub.
+function deriveDeviceRegPublic(seed) {
+  const material = deriveDeviceReg(seed);
+  try {
+    return ed25519.getPublicKey(material);
+  } finally {
+    wipeSecret(material);
+  }
+}
+
+// Per-person pseudonym: SHA-256("awai-drive/v1/owner" || registration pub).
 function deriveOwnerPseudonym(seed) {
-  return derive(seed, 'owner-pseudonym', 32);
+  const pub = deriveDeviceRegPublic(seed);
+  try {
+    return sha256(concatBytes([utf8(OWNER_PSEUDONYM_PREFIX), pub]));
+  } finally {
+    wipeSecret(pub);
+  }
 }
 
 function deriveHeadName(seed) {
@@ -170,80 +202,8 @@ function deriveHeadSignRoot(seed) {
   return derive(seed, 'head/sign-root', 32);
 }
 
-// --- Shamir 2-of-3 over GF(2^8), poly 0x11b, constant-time branch-free ---
-
-function gfMul(a, b) {
-  let r = 0;
-  let x = a;
-  // Fixed 8 iterations; mask is all-0 or all-1 derived from the multiplier bit
-  // without branching on the secret bit.
-  for (let i = 0; i < 8; i++) {
-    const mask = 0 - ((b >>> i) & 1); // 0x00 or 0xFF... (bit 0 operand)
-    r ^= x & mask;
-    const top = (x >>> 7) & 1;
-    x = ((x << 1) & 0xff) ^ (0x1b & (0 - top));
-  }
-  return r;
-}
-
-function gfPow(a, p) {
-  let r = 1;
-  for (let i = 0; i < p; i++) r = gfMul(r, a);
-  return r;
-}
-
-function gfInv(a) {
-  if (a === 0) throw new Error('zero has no inverse');
-  return gfPow(a, 254);
-}
-
-function gfDiv(a, b) {
-  return gfMul(a, gfInv(b));
-}
-
 function defaultRng(n) {
   return crypto.getRandomValues(new Uint8Array(n));
-}
-
-function shareChecksum(version, setId, id, data) {
-  return sha256(concatBytes([new Uint8Array([version & 0xff]), setId, new Uint8Array([id]), data]));
-}
-
-function validateShareEnvelope(share) {
-  if (share === null || typeof share !== 'object') throw new Error('invalid share: expected object');
-  if (share.version !== SHARE_VERSION) throw new Error('invalid share: unsupported version');
-  if (!(share.setId instanceof Uint8Array) || share.setId.length !== SET_ID_LEN) {
-    throw new Error('invalid share: setId must be Uint8Array(16)');
-  }
-  if (typeof share.id !== 'number' || !Number.isInteger(share.id) || share.id < SHARE_ID_MIN || share.id > SHARE_ID_MAX) {
-    throw new Error('invalid share: id must be an integer in 1..3');
-  }
-  if (!(share.data instanceof Uint8Array) || share.data.length !== SHARE_DATA_LEN) {
-    throw new Error('invalid share: data must be Uint8Array(32)');
-  }
-  if (!(share.checksum instanceof Uint8Array) || share.checksum.length !== SHARE_DATA_LEN) {
-    throw new Error('invalid share: checksum must be Uint8Array(32)');
-  }
-  const expected = shareChecksum(share.version, share.setId, share.id, share.data);
-  if (!bytesEqual(expected, share.checksum)) throw new Error('invalid share: checksum mismatch');
-}
-
-function makeShare(setId, id, data) {
-  return { version: SHARE_VERSION, setId, id, data, checksum: shareChecksum(SHARE_VERSION, setId, id, data) };
-}
-
-// Pure split with caller-supplied coefficients — for tests only (see header).
-// Production callers must use splitSecret23 (CSPRNG coefficients).
-function splitWithCoefficient(secret, coef, setId) {
-  if (!(secret instanceof Uint8Array) || secret.length !== 32) throw new Error('secret must be 32 bytes');
-  if (!(coef instanceof Uint8Array) || coef.length !== 32) throw new Error('coef must be 32 bytes');
-  if (!(setId instanceof Uint8Array) || setId.length !== SET_ID_LEN) throw new Error('setId must be Uint8Array(16)');
-  const xs = [1, 2, 3];
-  return xs.map((x) => {
-    const data = new Uint8Array(32);
-    for (let i = 0; i < 32; i++) data[i] = secret[i] ^ gfMul(coef[i], x);
-    return makeShare(setId, x, data);
-  });
 }
 
 function splitSecret23(secret) {
@@ -257,79 +217,34 @@ function splitSecret23(secret) {
   }
 }
 
-// Interpolate the polynomial defined by two shares at x = 0.
-function interpolateTwo(a, b) {
-  const x1 = a.id;
-  const x2 = b.id;
-  const l1 = gfDiv(x2, x2 ^ x1); // x2/(x2 - x1), subtraction = XOR in GF(2^8)
-  const l2 = gfDiv(x1, x1 ^ x2);
-  const out = new Uint8Array(32);
-  for (let i = 0; i < 32; i++) out[i] = gfMul(a.data[i], l1) ^ gfMul(b.data[i], l2);
-  return out;
-}
-
-// Evaluate the polynomial defined by two shares at an arbitrary x.
-function evaluateAt(a, b, x) {
-  const x1 = a.id;
-  const x2 = b.id;
-  const l1 = gfDiv(x ^ x2, x1 ^ x2);
-  const l2 = gfDiv(x ^ x1, x2 ^ x1);
-  const out = new Uint8Array(32);
-  for (let i = 0; i < 32; i++) out[i] = gfMul(a.data[i], l1) ^ gfMul(b.data[i], l2);
-  return out;
-}
-
-function combine23(shares) {
-  if (!Array.isArray(shares)) throw new Error('insufficient shares: need 2..3');
-  if (shares.length < 2) throw new Error('insufficient shares: need 2');
-  if (shares.length > 3) throw new Error('invalid shares: at most 3');
-  for (const s of shares) validateShareEnvelope(s);
-  const sorted = [...shares].sort((a, b) => a.id - b.id);
-  const setId = sorted[0].setId;
-  let mismatch = 0;
-  for (const s of sorted) {
-    if (!bytesEqual(s.setId, setId)) mismatch |= 1;
-  }
-  for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i].id === sorted[i - 1].id) throw new Error('duplicate share id');
-  }
-  if (mismatch) throw new Error('invalid shares: mixed setId');
-  const [a, b] = sorted;
-  const seed = interpolateTwo(a, b);
-  if (sorted.length === 3) {
-    // 3rd share must lie on the same degree-1 line (consistency check).
-    const predicted = evaluateAt(a, b, sorted[2].id);
-    let diff = 0;
-    for (let i = 0; i < 32; i++) diff |= predicted[i] ^ sorted[2].data[i];
-    wipeSecret(predicted);
-    if (diff !== 0) {
-      wipeSecret(seed);
-      throw new Error('invalid shares: third share inconsistent');
-    }
-  }
-  return seed;
-}
-
 // Full recovery: combine 2..3 envelopes, then verify against the
-// registration-time fingerprint (recovery recipient public value).
+// registration-time fingerprint (recovery recipient public value, sourced
+// from the owner-held paper per the provenance policy above).
+// The assembled seed is wiped on every failure path and never returned
+// on non-success; on success ownership transfers to the caller.
 function combineAndVerify(shares, expectedFingerprint) {
   if (!(expectedFingerprint instanceof Uint8Array) || expectedFingerprint.length !== 32) {
     throw new Error('expectedFingerprint must be Uint8Array(32)');
   }
   const seed = combine23(shares);
   let recipient;
+  let fingerprint;
   try {
     recipient = deriveRecipient(seed);
-    const fingerprint = fingerprintRecipient(recipient);
-    const ok = bytesEqual(fingerprint, expectedFingerprint);
-    wipeSecret(fingerprint);
-    if (!ok) throw new Error('fingerprint mismatch: wrong seed or wrong shares');
+    fingerprint = fingerprintRecipient(recipient);
+    if (!bytesEqual(fingerprint, expectedFingerprint)) {
+      throw new Error('fingerprint mismatch: wrong seed or wrong shares');
+    }
     return { seed };
+  } catch (err) {
+    wipeSecret(seed);
+    throw err;
   } finally {
     if (recipient) {
       wipeSecret(recipient.secretKey);
       wipeSecret(recipient.x25519Priv);
     }
+    if (fingerprint) wipeSecret(fingerprint);
   }
 }
 
@@ -340,11 +255,10 @@ export {
   deriveRecipient,
   fingerprintRecipient,
   deriveDeviceReg,
+  deriveDeviceRegPublic,
   deriveOwnerPseudonym,
   deriveHeadName,
   deriveHeadSignRoot,
   splitSecret23,
-  splitWithCoefficient,
-  combine23,
   combineAndVerify,
 };

@@ -4,21 +4,21 @@ import { readFileSync } from 'node:fs';
 import { sha256 } from '@noble/hashes/sha256.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
-import { x25519 } from '@noble/curves/ed25519.js';
+import { x25519, ed25519 } from '@noble/curves/ed25519.js';
 import {
   deriveRecipient,
   fingerprintRecipient,
   deriveDeviceReg,
+  deriveDeviceRegPublic,
   deriveOwnerPseudonym,
   deriveHeadName,
   deriveHeadSignRoot,
   splitSecret23,
-  splitWithCoefficient,
-  combine23,
   combineAndVerify,
   toHex,
   fromHex,
 } from '../src/recovery.js';
+import { splitWithCoefficient, combine23 } from '../src/internal/shamir.js';
 import { counterRng, fixedSetId } from './recovery-test-helpers.mjs';
 import { FIPS203_768_KEYGEN } from './fips203-vectors.mjs';
 
@@ -60,6 +60,21 @@ test('bundled noble ignores tipk', async () => {
   }
   assert.notEqual(toHex(head), toHex(signRoot));
   assert.notEqual(toHex(pseudo), toHex(reg));
+  // Table alignment: owner-pseudonym = SHA-256("awai-drive/v1/owner" ||
+  // registration public key); registration public = Ed25519 pub of the
+  // device-registration HKDF output.
+  {
+    const regMaterial = deriveDeviceReg(SYNTH_SEED);
+    const expectedPub = ed25519.getPublicKey(regMaterial);
+    assert.equal(toHex(expectedPub), toHex(deriveDeviceRegPublic(SYNTH_SEED)));
+    const prefix = new TextEncoder().encode('awai-drive/v1/owner');
+    const msg = new Uint8Array(prefix.length + expectedPub.length);
+    msg.set(prefix, 0);
+    msg.set(expectedPub, prefix.length);
+    assert.equal(toHex(deriveOwnerPseudonym(SYNTH_SEED)), toHex(sha256(msg)));
+    // Deterministic: same seed -> same pseudonym.
+    assert.equal(toHex(deriveOwnerPseudonym(SYNTH_SEED)), toHex(deriveOwnerPseudonym(SYNTH_SEED)));
+  }
   // Fingerprint is SHA-256 of both publics (kv1:).
   const fp = fingerprintRecipient(r1);
   assert.equal(toHex(fp), toHex(sha256(Uint8Array.from(Buffer.concat([r1.publicKey, r1.x25519Pub])))));
@@ -250,4 +265,16 @@ test('module evidence: no Buffer, no deterministic hook in production source', (
   assert.throws(() => splitSecret23(new Uint8Array(16)), /32 bytes/);
   assert.throws(() => splitWithCoefficient(new Uint8Array(16), new Uint8Array(32), fixedSetId()), /32 bytes/);
   assert.throws(() => splitWithCoefficient(SYNTH_SEED, new Uint8Array(16), fixedSetId()), /32 bytes/);
+});
+
+test('production module does not export splitWithCoefficient or combine23', async () => {
+  const prod = await import('../src/recovery.js');
+  assert.ok(!('splitWithCoefficient' in prod), 'splitWithCoefficient must not be a product export');
+  assert.ok(!('combine23' in prod), 'combine23 must not be a product export');
+  assert.equal(typeof prod.splitSecret23, 'function');
+  assert.equal(typeof prod.combineAndVerify, 'function');
+  // Wiping evidence: assembled seed wiped on failure; HKDF copies wiped.
+  const src = readFileSync(new URL('../src/recovery.js', import.meta.url), 'utf8');
+  assert.ok(src.includes('wipeSecret(seed)'), 'seed must be wiped on the failure path');
+  assert.ok(src.includes('wipeSecret(coins)') && src.includes('wipeSecret(scalar)'), 'HKDF copies must be wiped');
 });

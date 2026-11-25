@@ -1,7 +1,12 @@
 // Official FIPS 203 ML-KEM-768 keygen vector (ACVP ML-KEM-keyGen-FIPS203,
 // parameterSet ML-KEM-768, tcId 26): (d, z) -> (ek, dk). Source: NIST
-// ACVP-Server gen-val/json-files/ML-KEM-keyGen-FIPS203 (usnistgov/ACVP-Server).
-// KAT input only; synthetic public sample data, no user material.
+// ACVP-Server gen-val/json-files/ML-KEM-keyGen-FIPS203 (usnistgov/ACVP-Server),
+// commit 975de31eb83d87039ec88934fdc47d8c312b892d; retrieved as
+// https://raw.githubusercontent.com/usnistgov/ACVP-Server/975de31eb83d87039ec88934fdc47d8c312b892d/gen-val/json-files/ML-KEM-keyGen-FIPS203/expectedResults.json
+// (prompt.json for d/z). Cross-check: pinned @noble/post-quantum
+// ml_kem768.keygen(d||z) reproduces ek and dk byte-for-byte; swapping d/z
+// mismatches (both asserted in recovery.test.mjs). KAT input only;
+// synthetic public sample data, no user material.
 export const FIPS203_768_KEYGEN = {
   d: "e582b7d75e6c80b05ae392a1fc9f7153b12390fd99930368cc67a768baebc8a0",
   z: "1cdacb8740c0b87c4a379575f187b367cbfa3b300bf591b109f79816e9cbe8f0",
