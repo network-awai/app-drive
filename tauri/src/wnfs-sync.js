@@ -181,6 +181,26 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
         const sealStart = performance.now();
         const sealed = await compute('seal', session, { rows, recipients: Object.values(items) },
           rows.flatMap(row => row.bytes ? [row.bytes.buffer] : []));
+        // Seal-then-open self-check before publishing or committing the
+        // head. Publish readback only proves the bytes round-tripped
+        // through transport; re-opening (on copies, so the sealed buffers
+        // survive for publish) proves the snapshot is restorable and that
+        // its content matches the vault inventory exactly — paths,
+        // directory flags, sizes and hashes, including empty directories,
+        // with no excess or shortage.
+        const verifyCapsule = sealed.capsule.bytes.slice();
+        const verifyPacks = sealed.packs.map(pack => pack.slice());
+        const verified = await compute('verify', session, {
+          root: sealed.capsule.root, capsule: verifyCapsule, packs: verifyPacks
+        }, [verifyCapsule.buffer, ...verifyPacks.map(pack => pack.buffer)]);
+        if (verified?.basis !== sealed.basis) throw Error('sealed-snapshot-unverifiable');
+        const opened = new Map((verified.inventory ?? []).map(item => [item.path, item]));
+        if (!Array.isArray(verified.inventory) || opened.size !== entries.length ||
+            entries.some(entry => {
+              const row = opened.get(entry.path);
+              return !row || row.directory !== (entry.directory === true) ||
+                (!entry.directory && (row.size !== entry.size || row.sha256 !== entry.sha256));
+            })) throw Error('sealed-snapshot-inventory-mismatch');
         const publishStart = performance.now();
         const packBytes = sealed.packs.reduce((n, pack) => n + pack.length, sealed.capsule.bytes.length);
         const dataIds = [];
@@ -193,15 +213,6 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
             head: { schema: 'awai.drive.wnfs.v1', origin, root: wrapped.root, capsule: id, packs: dataIds } });
         }
         const publishedAt = performance.now();
-        // Seal-then-open self-check before committing the head: the
-        // publish readback above only proves the bytes round-tripped
-        // through transport. Re-open the sealed snapshot and confirm it
-        // is restorable, so a snapshot whose seal admits what open
-        // refuses is never committed as if it were stored safely.
-        const verified = await compute('verify', session, {
-          root: sealed.capsule.root, capsule: sealed.capsule.bytes, packs: sealed.packs
-        }, [sealed.capsule.bytes.buffer, ...sealed.packs.map(pack => pack.buffer)]);
-        if (verified?.basis !== sealed.basis) throw Error('sealed-snapshot-unverifiable');
         await invoke('vaultWnfsCommit', { root: sealed.capsule.root, capsule, packs: dataIds, origin, entries, recipientRevision: revision });
         return { files: rows.filter(row => !row.directory).length, basis: sealed.basis,
           bytes: packBytes, grants, dataPacks: dataIds.length, sealMs: publishStart - sealStart, publishMs: publishedAt - publishStart };
