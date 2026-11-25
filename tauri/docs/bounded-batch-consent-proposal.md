@@ -40,12 +40,29 @@ Deadline semantics:
   per-operation rules (receipt + full readback before commit).
 - Each new save needs a fresh approval; the default batch is never reused.
 
-Consent ledger (one entry per approval):
+Consent ledger (one entry per approval), aligned with the grant schema in
+`scalable-sync-design.md` §4.9:
 
-- endpoint, operation class, granted defaults (publishes/ops/bytes) and the
-  deadline, plus the hard caps shown at approval time;
+- **grant id** and nonce, endpoint, **method / path prefix (or operation
+  set)**, **data category**, **client / device binding**;
+- granted defaults (publishes/ops/bytes) and the deadline, plus the hard
+  caps shown at approval time;
+- reservation before send (N/B), and consumption including failures,
+  retries and readbacks;
 - outcome per operation (committed, refused, expired-unused), so a later
   audit can tell granted from used.
+
+## Two operating modes
+
+- **Normal save:** stays inside the default grant (4 publishes / 8 ops /
+  48 MiB / 5 minutes). This is the only default offered.
+- **Large resend (for example the 64 GiB forest-root rotation in
+  `portable-usb-custody.md` §6.3):** uses the **hard cap** (32 publishes /
+  128 ops / 1 GiB / 10 minutes) only with an **explicit approval**. The hard
+  cap is never presented as the suggested size, and a request above it is
+  refused, not partially granted. The rotation needs repeated grants
+  (the estimate is about 1,365 grants at the 48 MiB default).
+- Both modes are proposals: the owner has not fixed N / B / deadline.
 
 ## What stays unchanged
 

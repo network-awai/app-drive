@@ -14,6 +14,8 @@
   `scalable-sync-design.md` §4.8 のとおり、water mark と空き reserve は設定値で、SLO にしない（AWAI-2856）。
 - 測れなかった値は `unknown` と書き、測ったことにしない。`unknown` は記録として valid である。
 - 数値が無い間は「速い」「足りる」「GB 級が扱える」と主張しない。
+- **loopback の fixture で測った結果は、実機の USB 媒体を資格認定しない。** 仮想機・loopback の結果を実機の
+  耐久性・速度・FLUSH の証明として読み替えない（§5・§9）。
 
 ### 1.2 反対目的
 
@@ -157,6 +159,7 @@ volume open 時に実行し、結果を永続化する probe（v1.0 §4）。測
 | N9 | `validUntil` を過ぎた検証役の記録で evict する | 「不明」として拒否する |
 | N10 | `storeClass 3` だけの R2 を名乗る | 独立ドメインとして数えないため拒否する |
 | N11 | 同じ `requestId` で違う payload を送る | `idempotency-conflict`。2 回目を書かない |
+| N12 | **fake fsync**（`F_FULLFSYNC` / `FlushFileBuffers` / `fsync` / `FileDescriptor.sync()` を呼ばずに成功を返す変異版） | 破壊試験（`F-loop-*` / `F-vm-*` / `F-emu`）で、directory entry か内容が失われること。**実行時の timing では検出できない**ので、変異版を明示的に作り、`destructive: yes` で記録する |
 
 N5〜N7 は `F-loop-*` / `F-emu` で行う。N1〜N4 は `F-mem-store` と `F-tmp` で行える。**実機を使わない。**
 

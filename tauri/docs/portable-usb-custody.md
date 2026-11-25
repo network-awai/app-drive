@@ -11,7 +11,7 @@
 
 | 木 | 何を守るか | 暗号 | 正本 |
 |---|---|---|---|
-| container | 媒体の bytes（label、keyslot、WAL、地図、checkpoint、Pack） | `AES-256-GCM-SIV` を推奨（v1.0 §2） | Kura の形式改訂（v3） |
+| container | 媒体の bytes（label、keyslot、WAL、地図、checkpoint、Pack） | `AES-256-GCM-SIV` を推奨（v1.0 §2） | `awai-disk-format.md` §21（v3、main） |
 | E2EE | 利用者の平文（WNFS の private forest と file content） | WNFS の `XChaCha20-Poly1305`（`scalable-sync-design.md` §2） | `wnfs-cljc` と WNFS の実装 profile |
 
 **WNFS の write capability を container の鍵で包まない。** `awai-disk-format.md` D8 は「ディスク暗号化と E2EE を分ける」と定めており、この分離を保つ。理由:
@@ -34,21 +34,21 @@
 | recovery key | 256 bit の復旧鍵（**媒体には置かず、媒体外で別保管**。媒体に置くのは、この鍵で開く wrapped keyslot だけ） | **必須**（v1.0 §2） |
 | Passkey | WebAuthn の credential | 任意（端末が対応する場合） |
 
-- slot の数と id は **未決定**。Kura の形式（v3）で固定する。
-- Passkey から keyslot の鍵を導く方法（PRF の利用可否を含む）は **未決定**。**外部暗号レビュー**（v1.0 §6）で決める。**未決定の方式を実装の既定にしない。**
+- slot の数と id は **未決定**。`awai-disk-format.md` §21（main）で固定する。
+- Passkey から keyslot の鍵を導く方法（PRF の利用可否を含む）は **未決定**。**外部暗号レビュー**（`awai-disk-format.md` §17.2）で決める。**未決定の方式を実装の既定にしない。**
 
 ### 2.2 AAD
 
-- AAD は **canonical DAG-CBOR** の slot header とし、少なくとも次を束縛する: `format`（format 文字列）、`profile`（`portable-usb`）、`v`（format 版）、`volume-lineage-id`、`slot`、`kdf`（`alg`、`m`、`t`、`p`、`salt`）、`wrap`（`alg`、nonce）。**改訂案 §21.4 の keyslot の AAD と同じ分類子を使う**（raw の keyslot とは format 文字列も AAD も共有しない）。
+- AAD は **canonical DAG-CBOR** の slot header とし、少なくとも次を束縛する: `format`（format 文字列）、`profile`（`portable-usb`）、`v`（format 版）、`volume-lineage-id`、`slot`、`kdf`（`alg`、`m`、`t`、`p`、`salt`）、`wrap`（`alg`、nonce）。**`awai-disk-format.md` §21.4 の keyslot の AAD と同じ分類子を使う**（raw の keyslot とは format 文字列も AAD も共有しない）。
 - **AAD の対象は slot header 全体から、その slot の wrapped key と tag を除いたもの**とする。これで KDF 引数・slot 番号・lineage・profile を後から差し替えられない。
-- **sidecar は untrusted hint である。** 全欄に MAC を付けるが（改訂案 §21.2）、値は container の認証済み領域と、アプリに埋め込んだ下限に照合する。sidecar の値だけで下降の可否を決めない。
-- 長さ・整数の表現・並びは **未決定**。3 OS で同じ bytes になる canonical 形式を 1 つに固定し、**golden corpus** で検証する（v1.0 §6）。corpus が無い間は「cross-OS で読める」と主張しない。
+- **sidecar は untrusted hint である。** 全欄に MAC を付けるが（`awai-disk-format.md` §21.2）、値は container の認証済み領域と、アプリに埋め込んだ下限に照合する。sidecar の値だけで下降の可否を決めない。
+- 長さ・整数の表現・並びは **未決定**。3 OS で同じ bytes になる canonical 形式を 1 つに固定し、**golden corpus** で検証する（`awai-disk-format.md` §21.4・§17.2）。corpus が無い間は「cross-OS で読める」と主張しない。
 
 ### 2.3 下降の拒否
 
 - slot header に**最小の writer 版**（`minWriterVersion`）を記録する。
 - 読み手は、自分の版が `minWriterVersion` より低ければ **read-only** で開く（v3 の外側を読める場合）。KDF 引数がその版の最小より弱い slot は**使わない**（拒否であって、弱い方で開くのではない）。
-- 旧いアプリが v3 の外側（sidecar・container 外殻）を読めない場合は、**read-only または停止**（書かない）。どちらにするかは **R0 で固定する**（改訂案 §21.4）。ここでの「停止」は改訂案 §14 の語義（読みも拒否、`inspect` のみ）を指すが、この文書では read-only と停止のどちらを採るかを決めない。
+- 旧いアプリが v3 の外側（sidecar・container 外殻）または形式を読めない場合は、**`stopped`** に固定する（`version-unsupported` を返し、読まない・書かない。`awai-disk-format.md` §14・§21.4）。**`read-only` は「v3 を読めるが、`minWriterVersion` が自分の版より新しくて書けない」場合だけ**に使う。**形式を読めない旧アプリを `read-only` の例にしない。**
 - `minWriterVersion` は AAD に含める。**下げる操作を作らない。** 下げられるなら下降の拒否は意味を持たない。
 
 ### 2.4 lease と epoch
@@ -62,6 +62,24 @@
 - 端末の Keychain / Keystore にある blob（unlock、canonical wrapped key record）を、**暗号化 container 本体にも sidecar にも、平文でコピーしない。** sidecar は MAC 付きだが欄は平文であり、鍵素材の置き場所ではない。
 - 媒体に置いてよいのは、復旧鍵や passphrase で開く **wrapped keyslot** と、MAC 付きの lease / epoch だけ。**生の復旧鍵を置かず、端末の custody を媒体へ移したとも主張しない。**
 - これは `encrypted-sync.md` の「device custody」の境界を弱めないための規則である。
+
+### 2.6 復旧鍵の生命周期
+
+`awai-disk-format.md` §15.4 が R0 で固定する項目に合わせる。
+
+- **生成:** 256 bit。**媒体の外**（別保管）で生成し、**1 回だけ表示**する。表示の後に、利用者が正しく記録できたかを検証する。
+- **差し替え:** 新しい復旧鍵を作り、**新しい keyslot を追加してから**古い slot を無効化する（順序を逆にしない）。
+- **失効:** 古い keyslot を無効化し、AAD の版を上げる。**媒体の外の鍵を消しても、既に export されたコピーは失効しない**（§4）。
+- **下降拒否:** 版・KDF 引数の下降を拒否する（§2.3）。
+- **媒体外保管:** 生の鍵を媒体に置かない（§1・§2.5）。OS Keychain の blob も媒体にコピーしない。
+- 工場出荷リセットで keyslot を壊すかは `awai-disk-format.md` §15.4 のとおり**未決定**。**「リセット後は誰も読めない」と主張しない。**
+
+### 2.7 Passkey の同期（iCloud / Google）の脅威モデル
+
+- 同期される Passkey は、**同じアカウントの他の端末でも使える**。「この端末だけ」の custody ではない。
+- 許可 / 警告 / 禁止のどれにするか、および PRF を使って keyslot の鍵を導けるかは **未決定**で、**外部暗号レビュー**の対象（`awai-disk-format.md` §17.2）。
+- 同期 Passkey を使う場合も、**復旧鍵を必須**にし、Passkey だけに依存しない。
+- 端末の紛失時に同期 Passkey を失効させる経路（アカウント側の操作）を、**この文書は保証しない**。
 
 ## 3. 可搬 custody (a): 受入端末の公開鍵への out-of-band ペアリング
 
@@ -116,7 +134,7 @@
 
 - user の**1 回の明示的な確認**で、portable custody（capability と、その復元に要る最小の情報）を 1 つのパッケージとして出力する。
 - **オーナー確認対象の鍵操作**である（v1.0 §6）。この文書は設計だけで、実行しない。実行は別 gate（実装 + owner の承認）。
-- **append-only の監査 record** を書く。record を書けないなら export しない（記録できない操作を通さない）。
+- **append-only の監査 record** を書く。record を書けないなら export しない（記録できない操作を通さない）。監査 record は **hash chain + keyed MAC** で完全性（追記・削除の検出）を保つ。Portable-USB では**媒体に置かない**（端末の control record）。媒体と一緒に運ぶ必要がある場合は、別の暗号化された記録にする（形式は未決定）。
 
 ### 4.2 秘密値を記録しない
 
@@ -156,14 +174,14 @@ v1.0 §4 の規則を、媒体の運用に写す。
 |---|---|---|
 | 同じ `volume-lineage-id` + 同じ `volume-instance-uuid` + 新しい epoch、かつ前の lease が期限切れか明示 release | **正当な移動** | 開ける（RW） |
 | 同じ lineage + **違う** instance | **正当な clone** | 開ける。別の volume として扱う |
-| 同じ lineage + 同じ instance + 競合する epoch（同時、または lease が生きている） | **fork** | **停止**（改訂案 §14。既定では読みも拒否。`inspect` だけ許す）。epoch を進めない |
+| 同じ lineage + 同じ instance + 競合する epoch（同時、または lease が生きている） | **fork** | **停止**（`awai-disk-format.md` §14。既定では読みも拒否。`inspect` だけ許す）。epoch を進めない |
 | `dd` で複製した同じ instance の 2 つ | 上の fork の規則に当たる | **停止**。片方を自動で選ばない。**運用のヒントであって安全な経路ではない** |
 
-**「停止」の語義（改訂案 §14）:** 書き込みと回復を拒否し、**読み出しも拒否する**。診断用の読み取り専用 open（`inspect`）だけが、明示の操作で許される。**`read-only`（grade C や旧アプリの media downgrade のように読みを許す状態）と混ぜない。** デバイス集合の不一致・WAL の鎖切れ・root slot が成立しない場合・fork は、すべて「停止」である。
+**「停止」の語義（`awai-disk-format.md` §14）:** 書き込みと回復を拒否し、**読み出しも拒否する**。診断用の読み取り専用 open（`inspect`）だけが、明示の操作で許される。**`read-only`（grade C や旧アプリの media downgrade のように読みを許す状態）と混ぜない。** デバイス集合の不一致・WAL の鎖切れ・root slot が成立しない場合・fork は、すべて「停止」である。
 
 - **`dd` の写しを「バックアップ」として扱わない。** instance が同じなので、両方を開くと fork になる。fork の検出は「同じ lineage + 同じ instance + 競合 epoch」で行い、**自動で片方を選ばない**（v1.0 §4）。
 - clone は instance が違うので開ける。ただし clone した媒体を両方書き換えると、後で forest の merge が要る（`scalable-sync-design.md` §4.4 の merge は未実装）。**clone を「同期の代替」と呼ばない。**
-- 移動の正当性は lease の期限切れ / release で判定する。lease の MAC が合わない場合は「lease が無い」として**停止**する（改訂案 K-1）。
+- 移動の正当性は lease の期限切れ / release で判定する。lease の MAC が合わない場合は「lease が無い」として**停止**する（`awai-disk-format.md` §18.3 K-1）。
 
 ## 6. 紛失と失効
 
@@ -172,22 +190,26 @@ v1.0 §4 の規則を、媒体の運用に写す。
 - container の鍵を替えても、WNFS の capability は別の木（§1）なので**有効なまま**である。
 - したがって、媒体を失ったときの失効は **forest root のローテーション + copy 移行**でしか行えない（v1.0 §2・§6）。
 - **capability が無い媒体は「復号不能」**である。container を開けても平文は読めない。**「読取専用」と書かない**（v1.0 §2）。
-- **「失効」の定義:** 新しい root が正本になり、旧 capability では**以後の書込みを復号できない**状態を指す。**過去に取得されたコピー（端末・媒体・第三者が既にダウンロードした bytes）は消せない。** 「失効 = すべてのコピーを回収した」ではない。
+- **「失効」の定義（3 段階）:**
+  1. **step 4（新 root の正本化）:** 旧 capability は**新 root のデータを復号できず、新 root への書込みもできない**（以後の新データのカットオフ）。
+  2. **旧 root への書込み:** 旧 root が配信され lease が生きている間は可能。**server 強制は W4 以降**。それまでは fork / 放棄 branch として扱い、「旧 capability はもう書けない」と主張しない。
+  3. **step 5（旧 root の配信停止・lease release）:** 旧 root を配信から外す。**暗号学的無効化ではない**（既に取得されたコピーは読める）。
+- 要約: **以後の新 root のデータは読めない。過去のコピーは消せない。旧 root への書込みは W4 まで防げない。** 「失効 = すべてのコピーを回収した」ではない。
 
 ### 6.2 手順
 
 1. **新しい forest root を作る。** 現在の root から到達する directory node と forest HAMT node、および file content block を、新しい content key で再暗号化する（WNFS は内容が変わるたびに content key を作り直す。`scalable-sync-design.md` §4.4）。
 2. **再 seal した block を新しい Pack として送る。** 既存の CID は内容が変わるので再利用できない。
 3. **readback で全 Pack を検証する**（`scalable-sync-design.md` §4.7 の `committed` 条件）。
-4. **新しい root を control record に書く。** これで新しい capability が正本になる。**この時点で、旧 capability は以後の書込みに使えない（§6.1 の失効の定義）。**
-5. **旧 root を配信から外す。** 旧 lease を renew しない → 期限切れ / release。**新 root と新 Pack の lease** の検証役 `policy-satisfied`（R2 以上、`validUntil` 内）を確認する。**旧 root の `policy-satisfied` は失効の条件ではない。**
+4. **新しい root を control record に書く。** これで新しい capability が正本になる。**以後の新 root のデータのカットオフ**（旧 capability は新 root を復号できず、新 root へ書けない）。**旧 root への書込みは、旧 root が配信され lease が生きている間は可能**（server 強制は W4 以降）。
+5. **旧 root を配信から外す。** 旧 lease を renew しない → 期限切れ / release。**新 root と新 Pack の lease** の検証役 `policy-satisfied`（R2 以上、`validUntil` 内）を確認する。**旧 root の `policy-satisfied` は失効の条件ではない。** これは**暗号学的無効化ではない**（既に取得されたコピーは読める）。
 6. **旧 block を回収する。** lease の解放と、同じ CID を指す他の lease が無いことの確認後（`app-itonami-yataverse/docs/retention-design.md` §10 の解放条件）。順序は「配信から外す → lease を release → 期限 / lock の制約を待つ → 削除」。**回収は別 gate。**
 
-- 1〜3 の間、旧 capability は**まだ有効**である。**手順の途中で「失効済み」と表示しない。**
-- **旧 revision（`previous` / skip ratchet）の履歴は旧 root の下に残る。** 新 root は旧 root を参照しない。旧 root を配信から外し、旧 lease を release して初めて、旧 capability は新しい書込みに使えない。
+- 1〜3 の間、旧 capability は**新 root を読めない**（新 root への書込みもできない）。**手順の途中で「すべて失効した」と表示しない。**
+- **旧 revision（`previous` / skip ratchet）の履歴は旧 root の下に残る。** 新 root は旧 root を参照しない。旧 root を配信から外し、旧 lease を release して初めて、新しい client は旧 root に到達できない。**既に取得されたコピーは残る。**
 - **remote-only の block も対象**である。手元に無い block は取得して再 seal する（再暗号化の対象は closure 全体で、手元の有無に依らない）。
 - 残った端末は、新 capability を **OOB ペアリング（§3）で明示的に再ペアリング**する。再ペアリングしない端末を **device revocation list**（device id / capability id）に載せ、control record に保持する。**server 側の強制は W4（write proof）まで無い**ので、「一覧に載せた = サーバが拒否する」と主張しない。
-- rollback: 新旧の root が併存する間は旧 root に戻せる。5 の後は旧 root を配信から外しているので、戻すには配信を戻す操作が要る（**「戻せない」ではなく「別の操作が要る」**）。既に取得されたコピーは、どの段階でも回収できない。
+- rollback: 新旧の root が併存する間は旧 root に戻せる。5 の後は旧 root を配信から外しているので、戻すには配信を戻す操作が要る（**「戻せない」ではなく「別の操作が要る」**）。既に取得されたコピーは、どの段階でも回収できない。**6 の回収の後は戻せない。**
 - **失効は検証役の可用性に依存しない。** 新 root への切替（4）は即時で、検証役が止まっていても行える。検証役が要るのは、新 root / 新 Pack の保持の確認と、旧 block の回収（R2 の範囲）である。
 
 ### 6.3 費用と所要時間（見積り）
@@ -196,7 +218,7 @@ v1.0 §4 の規則を、媒体の運用に写す。
 
 - 対象は v1.0 §5 の 64 GiB 級 profile。
 - block は WNFS の暗号文 block 262,144 B（`scalable-sync-design.md` §2）。
-- **転送の Pack は 12 MiB**（Yataverse の transport 上限。`encrypted-sync.md`、改訂案 §18.3 #10）。ローカルの Pack 目標 32 MiB（`scalable-sync-design.md` §4.5）とは別で、再送の単位は transport の上限で決まる。
+- **転送の Pack は 12 MiB**（Yataverse の transport 上限。`encrypted-sync.md`、`awai-disk-format.md` §18.3 #10）。ローカルの Pack 目標 32 MiB（`scalable-sync-design.md` §4.5）とは別で、再送の単位は transport の上限で決まる。
 - 1 Pack につき PUT 1 回 + readback GET 1 回。
 - 回線は上り下りとも同じ実効速度とし、再送・再開・CPU 時間を含めない。
 
@@ -247,9 +269,11 @@ broker の承認回数（B の定義で変わる。数値は [bounded-batch-cons
 
 - **hardware-backed custody。** Passkey は user presence の確認で、secure element による鍵の保持を証明しない。Keystore の鍵が hardware-backed かは端末依存で、**未確認**。
 - **物理的な FBE / FileVault / LUKS。** 媒体の盗難に対する OS の暗号化は OS が持つ（`awai-disk-format.md` §9）。Awai は持たない。
-- **オフライン・媒体全体の巻き戻しの検出。** 検出できない（v1.0 §6）。同一端末の high-water は、キーを **`(volume-lineage-id, volume-instance-uuid)`**、値を **「見た最大の writer epoch + 最大の open 回数（単調）」**とする（改訂案 §4.5・§21.6）。キーに instance を入れるので、**`dd` 写し（同じ instance）の巻き戻しは検出でき、正当な clone（別の instance）は誤検出しない**。`session id` は入れない（乱数で大小に意味がない。重複の検出は WAL・地図の session id の集合との照合で別に行う）。**永続化の置き場は未決定**（子 issue 18）。**別端末への全体巻き戻しは検出しない。**
-- **外部暗号レビュー。** v1.0 §6 の順序（R0 固定 → 外部レビュー → R3 出口 → R2 形式凍結）の前段階であり、レビューは未発注・未課金（この task の範囲外）。
-- **Kura の形式（v3）の bytes。** この文書は形式を確定しない。AAD の canonical 形式と golden corpus は Kura の改訂と共通にする。
+- **オフライン・媒体全体の巻き戻しの検出。** 検出できない（v1.0 §6）。同一端末の high-water は、キーを **`(volume-lineage-id, volume-instance-uuid)`**、値を **「見た最大の writer epoch + 最大の open 回数（単調）」**とする（`awai-disk-format.md` §4.5・§21.6）。**同一端末で、その端末が新しい epoch を見た後に限り検出する。別端末での `dd` 写しは検出しない。** キーに instance を入れるので、同じ端末の `dd` 写しの巻き戻しは検出でき、正当な clone（別の instance）は誤検出しない。`session id` は入れない（乱数で大小に意味がない。重複の検出は WAL・地図の session id の集合との照合で別に行う）。high-water は **volume / media の外**の device-protected store に置き、**端末 backup の復元で戻らない**前提（置き場は未決定・子 #18）。**別端末への全体巻き戻しは検出しない。**
+- **外部暗号レビュー。** `awai-disk-format.md` §17.2 の順序（`R0 固定 → 外部暗号レビュー（R3 実装着手の前提）→ R3 実装 → R3 出口（指摘の反映確認）→ R2 形式凍結`）に従う。**「出口 = レビュー」とは書かない。** レビューは未発注・未課金（この task の範囲外）。
+- **JS / WebView のメモリ 0 埋めは保証しない。** 平文と鍵の扱いは **Rust / secure buffer を前提**にする（WebView の GC とコピーを制御できない）。
+- **WNFS の `XChaCha20-Poly1305` の nonce の作り方**（session id からの導出を含む）は、**外部暗号レビューの対象**である（`awai-disk-format.md` §15.5・§15.6・§17.2）。
+- **`awai-disk-format.md` §21（v3）の bytes。** この文書は形式を確定しない。AAD の canonical 形式と golden corpus は `awai-disk-format.md`（main）と共通にする。
 - **性能。** §6.3 は見積りで、実測ではない。
 
 以上の限界は AWAI-4118 v1.0 §6（鍵・暗号・可搬 custody・巻き戻し）と §2（プロファイル）の範囲を広げない。
@@ -264,7 +288,7 @@ broker の承認回数（B の定義で変わる。数値は [bounded-batch-cons
 6. **export パッケージの暗号化の既定**（受入端末の公開鍵か passphrase か）と、passphrase の最低基準。
 7. **監査 record の保持期間と暗号化**（`drive-host-ipc.md` §6.3 と同じ置き場所）。
 8. **clone した媒体の merge**（`scalable-sync-design.md` §4.4 の merge は未実装）。clone を同期の代替にできるかは、この実装の後。
-9. **high-water の永続化の置き場**（端末のどこに置くか。改訂案 §21.6 は「未決定」としている）。
-10. **device revocation list の server 側の強制**。W4（write proof）まで無い。一覧は control record の記録で、サーバの拒否ではない。
+9. **high-water の永続化の置き場**（端末のどこに置くか。`awai-disk-format.md` §21.6 は「未決定」としている。**volume / media の外**の device-protected store に置き、端末 backup の復元で戻らない前提。置き場そのものは未決定・子 #18）。
+10. **device revocation list の server 側の強制**。W4（write proof）まで無い。一覧は control record の記録で、サーバの拒否ではない。**旧 root への書込みは W4 まで防げない。**
 11. **12 MiB の transport 上限の引き上げ時期**（§6.3 の見積りは 12 MiB を前提にした）。引き上げは認可の後（`scalable-sync-design.md` §4.9）。
-12. **sidecar に置く欄**（label の写し、keyslot の外側の欄、最小 writer 版の候補。改訂案 §21.2 は未決定）。
+12. **sidecar に置く欄**（label の写し、keyslot の外側の欄、最小 writer 版の候補。`awai-disk-format.md` §21.2 は未決定）。

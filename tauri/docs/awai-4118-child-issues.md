@@ -3,7 +3,7 @@
 - **提案。Linear には未作成（Owner 承認後に起票）。** この文書は起票の案で、issue の作成・更新・状態変更を行っていない。
 - 日付: 2026-11-25（改訂: レビュー指摘の反映）
 - Tracking: [AWAI-4118](https://linear.app/kotobalabs/issue/AWAI-4118)（この作業は Orca Item #302。v1.0 の Item #295 は Organizer の item）
-- 根拠: AWAI-4118 確定設計 v1.0 §7、[drive-host-ipc.md](drive-host-ipc.md)、[portable-usb-custody.md](portable-usb-custody.md)、[scalable-sync-design.md](scalable-sync-design.md) §4.8・§4.9・§8、[p0-measurement-plan.md](p0-measurement-plan.md)、`network-awai/network-awai-apex` PR #381 の `docs/awai-disk-format.md` **改訂案**（未マージ）
+- 根拠: AWAI-4118 確定設計 v1.0 §7、[drive-host-ipc.md](drive-host-ipc.md)、[portable-usb-custody.md](portable-usb-custody.md)、[scalable-sync-design.md](scalable-sync-design.md) §4.8・§4.9・§8、[p0-measurement-plan.md](p0-measurement-plan.md)、`network-awai/network-awai-apex/docs/awai-disk-format.md`（**main**。PR #381 は 2026-11-25 にマージ済み）。PR #382 は未マージ（head `0688afd6`）で、この提案は依存しない。
 - 起票の単位は「別の PR にできる作業」。依存は実装の順序で、番号は優先順位ではない。**gate が通るまで、それぞれの「主張しないこと」を主張しない。**
 - 前版からの変更: #1・#3・#4・#6・#7・#9・#10・#12・#14 の受入と依存を修正し、#15〜#23 を追加した（計 23 件）。#6↔#7 の循環と #9 の自己依存 D3 を解消した。
 
@@ -11,12 +11,12 @@
 
 | # | 提案する title | repo | gate | 依存 |
 |---|---|---|---|---|
-| 1 | Drive host の骨格: lineage 別の単一インスタンスと `awai-disk-core` の独占 link | app-drive | none | — |
+| 1 | Drive host の骨格: `(lineage, instance)` 別の単一インスタンスと `awai-disk-core` の独占 link | app-drive | none | — |
 | 2 | IPC schema v1 と OS 別 transport | app-drive | none | 1 |
 | 3 | peer 認証、client の namespace / quota、cross-client の pin 保護 | app-drive | none | 2 |
 | 4 | `request-id` の冪等性と `get-commit-status` | app-drive | none | 2, 3 |
 | 5 | OS 統合アダプタ（File Provider / DocumentsProvider / WinFsp / FUSE） | app-drive | none | 2, 3 |
-| 6 | Portable-USB の container v3（D8）の実装 | apex（Kura の形式）+ app-drive | external crypto review | Kura の形式 PR（#381） |
+| 6 | Portable-USB の container v3（D8）の実装 | apex（`awai-disk-format.md`）+ app-drive | external crypto review | `awai-disk-format.md`（main、#381 マージ済み） |
 | 7 | OOB ペアリング、portable custody export、監査 record | app-drive | owner decision（鍵操作） | 6 |
 | 8 | forest root のローテーション、copy 移行、drill | app-drive + app-itonami-yataverse | owner decision（鍵操作） | 6, 10 |
 | 9 | §4.8 の namespace closure の退避、repack、Stage 1 | app-drive | none | P0, W1, W2, W3, D1, D2, 19 |
@@ -29,7 +29,7 @@
 | 16 | FS probe と FLUSH 等級 A〜C の実装 | app-drive | none | 1 |
 | 17 | USB の抜挿・safe-eject・`degraded-pack-absent`・交換 | app-drive | none | 1, 16 |
 | 18 | 端末 high-water の永続化 | app-drive | none | 1 |
-| 19 | namespace closure の置き場（Local-Meta は内蔵 meta、Portable は container） | app-drive | none | Kura の形式 PR |
+| 19 | namespace closure の置き場（Local-Meta は内蔵 meta、Portable は container） | app-drive | none | `awai-disk-format.md`（main） |
 | 20 | device floor の `no-space` と quota 台帳 | app-drive | none | 1 |
 | 21 | OS の backup / 索引からの除外 | app-drive | none | 1 |
 | 22 | P6 の大規模退避 grant と Stage 3 の無人 LRU | shared runtime + app-drive | owner decision（既定の N / B） | 10, 11 |
@@ -41,14 +41,17 @@
 
 ### 1. Drive host の骨格
 
-**scope:** daemon / sidecar / bound service の骨格を OS ごとに作り、**`volume-lineage-id` を含む endpoint 名**で単一インスタンスを
-選出する（macOS の `MachServices`、Windows の named mutex + pipe、Linux の socket path）。同じ lineage の 2 つ目は client になり、
-**違う lineage は別 host** として起動してよい。`awai-disk-core` の link を 1 つに保ち、`flock` が取れないときは writer にならない
-（`drive-host-ipc.md` §1・§2）。Windows の排他の primitive は Kura の形式改訂に合わせて決める。
+**scope:** daemon / sidecar / bound service の骨格を OS ごとに作り、**`(volume-lineage-id, volume-instance-uuid)` を含む
+endpoint 名**で単一インスタンスを選出する（macOS の `MachServices`、Windows の named mutex + pipe、Linux の socket path）。
+同じ `(lineage, instance)` の 2 つ目は client になり、**別 instance の正当な clone は別 volume host** として起動してよい。
+`awai-disk-core` の link を 1 つに保ち、`flock` が取れないときは writer にならない（`drive-host-ipc.md` §1・§2）。
+Windows の排他の primitive は `awai-disk-format.md`（main）に合わせて決める。
 
-**受入の証拠:** 同じ lineage で 2 回起動して 1 つが client になること。違う lineage の 2 つが同時に動けること。2 番目のプロセスが
-volume を開けないこと。UI を閉じても host が動き続けること（OS ごと）。host の crash 後に volume が open からやり直せること。
-**Android は `exported="true"` + signature 権限で bind でき、`exported="false"` では別 app から bind できない例外を記録する。**
+**受入の証拠:** 同じ `(lineage, instance)` で 2 回起動して 1 つが client になること。別 instance（clone）の 2 つが同時に
+別 volume host として動けること。2 番目のプロセスが同じ volume を開けないこと。**macOS / Windows / Linux は UI を閉じても
+継続する。Android は実行中の同期 / 退避 / Pack 封がある間だけ foreground service で継続し、なければ止まる**（`drive-host-ipc.md` §2.5）。
+host の crash 後に volume が open からやり直せること。**Android は `exported="true"` + signature 権限で bind でき、
+`exported="false"` では別 app から bind できない例外を記録する。**
 
 **依存:** なし。
 
@@ -61,7 +64,9 @@ Windows の named pipe、Linux の Unix socket、Android の AIDL + `ParcelFileD
 `inspect` の op を足す（`drive-host-ipc.md` §4）。
 
 **受入の証拠:** 未知の版を `version-unsupported` で拒否すること。1 MiB を超える制御メッセージを `too-large` で拒否すること。
-bytes が inline の base64 で運ばれないこと。transport ごとに同じ schema で往復できること。
+bytes が inline の base64 で運ばれないこと。transport ごとに同じ schema で往復できること。**`set-closure` と `get-volume-status` が
+往復すること。** **負の対照: false CID は `cid-mismatch`、short read は拒否、262,144 B を超える block は `too-large`、
+symlink の `dataHandle` は拒否（`O_NOFOLLOW`）。**
 
 **依存:** 1。
 
@@ -72,11 +77,16 @@ bytes が inline の base64 で運ばれないこと。transport ごとに同じ
 **scope:** OS ごとの peer 認証（署名 requirement、pipe の ACL と token、`SO_PEERCRED`、**`exported="true"` + signature 権限 + UID**）を
 実装し、clientId の割り当て、`clients/<clientId>` の namespace、quota の予約と実使用、pin の所有と cross-client の拒否
 （`drive-host-ipc.md` §3・§6）を実装する。**client から host の認証**（署名 / package identity、または pin した host 公開鍵との
-challenge-response）と endpoint squat の拒否も含む。監査 record は append-only で、秘密値を含めない。
+challenge-response）と endpoint squat の拒否も含む。**署名済み namespace closure と namespace capability**（opaque handle、
+または `(clientId, namespace root CID, closure version)` への MAC）を control record に保持し、`set-closure` の検証・
+原子的更新・`closure-unknown` の拒否を実装する。**pin は自分の closure 内に限定する。** 監査 record は append-only で、
+hash chain + keyed MAC を持ち、秘密値を含めない。
 
 **受入の証拠:** 未認証の peer が `unauthorized` で閉じられること。namespace の外の読み書きが拒否されること。
 client A の pin を client B が evict できず、拒否が監査 record に残ること。予約が取れない `put` が bytes を書かないこと。
-**pin が quota を二重に消費しないこと。** 偽 host（pin した鍵と違う host）に繋がないこと。
+**pin が quota を二重に消費せず、closure 外の pin が `closure-unknown` になること。** 偽 host（pin した鍵と違う host）に
+繋がないこと。**未登録・古い・署名不一致の closure で `put` / `get` / `evict` / `pin` が拒否され、退避と closure 外の読みが
+止まること。** **負の対照: false CID（`cid-mismatch`）・short read・oversize block（`too-large`）を 2 と共有して確認する。**
 
 **依存:** 2。
 
@@ -89,9 +99,11 @@ client A の pin を client B が evict できず、拒否が監査 record に�
 record の寿命（`drive-host-ipc.md` §5）を実装する。
 
 **受入の証拠:** ack を落としても `get-commit-status` が答えられること。同じ `requestId` で違う payload が
-`idempotency-conflict` になること。record の期限切れが `unknown` になること。
+`idempotency-conflict` になること。record の期限切れが `unknown` になること。**`requestId` が CSPRNG で、host の再起動を
+跨いで再利用されないこと。** **負の対照: false CID・short read・oversize block の拒否が、ack 喪失後の照会でも二重 commit に
+ならないこと。**
 
-**依存:** 2, 3。**WAL frame への `requestId` の搭載は Kura 側の別 issue（または PR #381 §11 の未決定）に依存する。**
+**依存:** 2, 3。**WAL frame への `requestId` の搭載は Kura 側の別 issue（または `awai-disk-format.md` §11 の未決定）に依存する。**
 
 **gate まで主張しないこと:** 「crash 時に `unknown` が無い」。WAL に `requestId` が入るまでは `unknown` が残る
 （`drive-host-ipc.md` §5.4）。
@@ -103,7 +115,8 @@ record の寿命（`drive-host-ipc.md` §5）を実装する。
 DocumentsProvider は現行どおり read-only、WinFsp / FUSE は未決定。
 
 **受入の証拠:** アダプタが `awai-disk-core` を link していないこと。write を許さない mode で write が `read-only` になること。
-File Provider の cache と `cache/` が二重にならないこと。
+File Provider の cache と `cache/` が二重にならないこと。**endpoint は `(volume-lineage-id, volume-instance-uuid)` を含み、
+clone（別 instance）は別 host として開けること。**
 
 **依存:** 2, 3。
 
@@ -111,16 +124,16 @@ File Provider の cache と `cache/` が二重にならないこと。
 
 ### 6. Portable-USB の container v3（D8）
 
-**scope:** Kura の形式改訂（PR #381 の §21）に従い、hosted-file の暗号化単一コンテナ + sidecar を実装する。
+**scope:** `awai-disk-format.md` §21（**main**、PR #381 マージ済み）に従い、hosted-file の暗号化単一コンテナ + sidecar を実装する。
 `AES-256-GCM-SIV`、Argon2id + 256 bit の復旧鍵 + Passkey、AAD の canonical 形式と golden corpus、下降拒否、MAC 付き
 lease / epoch（`portable-usb-custody.md` §2）。**生の復旧鍵は媒体に置かず、媒体外で別保管する。**
 
 **受入の証拠:** 3 OS で同じ golden corpus の AAD が一致すること。弱い KDF 引数と `minWriterVersion` の下降を拒否すること。
 lease の MAC の不一致で書き込みが止まること。**鍵の生成・ローテーションはこの issue では行わない。**
 
-**依存:** Kura の形式 PR（#381）。**7 には依存しない**（custody の export が無くても container は実装できる）。
+**依存:** `awai-disk-format.md`（main、#381 マージ済み）。**7 には依存しない**（custody の export が無くても container は実装できる）。
 
-**gate まで主張しないこと:** 「Portable-USB が使える」。**外部暗号レビュー**（v1.0 §6）と Kura の形式 PR の後。
+**gate まで主張しないこと:** 「Portable-USB が使える」。**外部暗号レビュー**（`awai-disk-format.md` §17.2）と、main の形式の後。
 レビューの発注・課金は owner の確認。
 
 ### 7. OOB ペアリングと custody export
@@ -140,8 +153,9 @@ export しないこと。error message と log に秘密値が出ないこと（
 ### 8. forest root のローテーションと copy 移行
 
 **scope:** 紛失時の forest root のローテーション、再 seal、copy 移行、drill（`portable-usb-custody.md` §6・§7）を実装する。
-失効の定義（新 root が正本、旧 capability は以後の書込みに使えない、過去のコピーは消せない）、旧 revision と remote-only block の
-扱い、retention と削除順序、残存端末の再ペアリング、device revocation list を含む。
+**失効の 3 段階**（新 root の正本化で旧 capability は新 root を読めず書けない、旧 root への書込みは W4 まで防げない、
+配信停止は暗号学的無効化ではない）、旧 revision と remote-only block の扱い、retention と削除順序、残存端末の再ペアリング、
+device revocation list を含む。
 
 **受入の証拠:** drill を捨ててよい fixture で通すこと。新 root の正本化が検証役の停止中でも行えること。旧 root の配信停止と
 lease release の順序。**実機の USB と実鍵では行わない。**
@@ -153,12 +167,14 @@ lease release の順序。**実機の USB と実鍵では行わない。**
 
 ### 9. §4.8 の namespace closure の退避と Stage 1
 
-**scope:** 退避の単位を file content block にし、directory node と forest node を保護する。repack / compaction を実装し、
+**scope:** 退避の単位を file content block にし、directory node と forest node を保護する。**署名済み closure の集合と
+protected set digest**（`set-closure`、`drive-host-ipc.md` §4.7）を退避の判定に使い、repack / compaction を実装し、
 Stage 1（`cache/` の LRU）を実装する（`scalable-sync-design.md` §4.8）。closure は Local-Meta で内蔵 meta、Portable で
-container 内に置く（19）。
+container 内に置く（19）。**closure 外の CID と pin は対象にしない。**
 
 **受入の証拠:** `cache/` の block だけが消え、directory / forest node が残ること。部分退避を拒否すること。repack の後に
 CID が一致すること。N4（directory entry の欠落）が検出されること。**USB 不在でも一覧と path 解決ができること（Local-Meta）。**
+**closure が未登録・古い・署名不一致なら `closure-unknown` で退避しないこと。closure 外の pin を evict の根拠にしないこと。**
 
 **依存:** P0, W1, W2, W3, D1, D2, 19。**D3 には依存しない**（この issue が D3 / Stage 1 である）。
 
@@ -195,9 +211,11 @@ revoke の強制（`scalable-sync-design.md` §4.9）。
 ### 12. client 側の古い `base-epoch` の commit 拒否
 
 **scope:** `sync client` が、サーバが返す単調 epoch と自分の `base-epoch` を照合し、古い `base-epoch` の commit を
-**型付きで拒否**する。黙って rebase しない（`scalable-sync-design.md` §4.8）。
+**型付きで拒否**する。黙って rebase しない（`scalable-sync-design.md` §4.8）。**信頼点（クライアント側のピン留め、または
+transparency log）の実装もこの issue に含める**（分割する場合は #24 を追加する）。
 
-**受入の証拠:** 古い `base-epoch` の commit を送らないこと。拒否の理由を UI に出すこと。
+**受入の証拠:** 古い `base-epoch` の commit を送らないこと。拒否の理由を UI に出すこと。**信頼点が無い場合、サーバ（または
+経路）が古い状態を示しても気づけないことを記録し、検出を主張しないこと。**
 
 **依存:** 15（サーバの commit / `base-epoch` の設計）。**15 が入るまで、オンラインの巻き戻し検出を主張しない。**
 
@@ -208,7 +226,8 @@ revoke の強制（`scalable-sync-design.md` §4.9）。
 **scope:** [p0-measurement-plan.md](p0-measurement-plan.md) の §4〜§7 を 3 OS で実施する。fixture は loopback の image、一時 volume、
 fake store、emulator、捨ててよい VM だけを使う。破壊試験は fixture だけで行い、ラベルを付ける。
 
-**受入の証拠:** §2 の形式の記録。`unknown` の項目とその理由。負の対照 N1〜N11 の結果。**実機の USB を使っていないこと。**
+**受入の証拠:** §2 の形式の記録。`unknown` の項目とその理由。負の対照 **N1〜N12** の結果。**実機の USB を使っていないこと。
+loopback の結果を実機 USB の資格認定として扱わないこと。**
 
 **依存:** なし。
 
@@ -230,7 +249,7 @@ fake store、emulator、捨ててよい VM だけを使う。破壊試験は fix
 ### 15. サーバ commit の単調 epoch と `base-epoch` の設計
 
 **scope:** Yataverse の入口に、lease と commit の**単調 epoch**、`base-epoch` の記録、古い `base-epoch` の commit の拒否を設計する。
-クライアント側のピン留め、または transparency log が前提であることを明記する（改訂案 §20 の 16）。実装はこの設計の後。
+クライアント側のピン留め、または transparency log が前提であることを明記する（`awai-disk-format.md` §20 の 16）。実装はこの設計の後。
 
 **受入の証拠:** 設計文書（`app-itonami-yataverse` の docs）。古い `base-epoch` の拒否の型と、同じ内容の再送の冪等性。
 **実装と受入は別 issue。**
@@ -242,7 +261,7 @@ fake store、emulator、捨ててよい VM だけを使う。破壊試験は fix
 ### 16. FS probe と FLUSH 等級 A〜C
 
 **scope:** volume open 時の FS probe（最強の sync primitive、filesystem 種別と journal、directory entry の生存、rename の原子性、
-4 GiB 超）と、FLUSH 等級 A / B / C の実装・降格（A→C で即時に書き込み停止）（改訂案 §4.9）。**抜け分類 (1)。**
+4 GiB 超）と、FLUSH 等級 A / B / C の実装・降格（A→C で即時に書き込み停止）（`awai-disk-format.md` §4.9）。**抜け分類 (1)。**
 
 **受入の証拠:** fsync だけの弱い probe を通さないこと。SMB / NFS を拒否すること。A→C の降格で書き込みが止まること。
 primitive の名前と結果が device ごとに永続化されること。**破壊試験は fixture だけで、`destructive: yes` を記録する。**
@@ -255,7 +274,7 @@ primitive の名前と結果が device ごとに永続化されること。**破
 
 **scope:** Local-Meta の `optional` の pack device の不在（`degraded-pack-absent`）と、Portable の `volume-absent`、
 safe-eject（dirty を無くす → FLUSH → lease release → clean。必須は等級 A / B）、USB の交換（旧 device UUID の retire、
-新 UUID の追加、remote からの再取得）（改訂案 §4.4・§21.8）。**抜け分類 (2)。**
+新 UUID の追加、remote からの再取得）（`awai-disk-format.md` §4.4・§21.8）。**抜け分類 (2)。**
 
 **受入の証拠:** 抜去中に読みが CID 検証済みの cache / remote だけになること。書きが拒否されること。内蔵に新しい volume を
 作らないこと。`degraded-pack-absent` と `stopped` が混ざらないこと。safe-eject の後に `volume-absent` になること。
@@ -266,11 +285,14 @@ safe-eject（dirty を無くす → FLUSH → lease release → clean。必須�
 
 ### 18. 端末 high-water の永続化
 
-**scope:** 同一端末の high-water（`(volume-lineage-id, volume-instance-uuid) → writer epoch の最大値`）を永続化し、
-古い epoch の媒体を停止する（改訂案 §21.6）。**session id を high-water に使わない。** **抜け分類 (3)。**
+**scope:** 同一端末の high-water（キー `(volume-lineage-id, volume-instance-uuid)`、値「見た最大の writer epoch + 最大の
+open 回数（単調）」）を永続化し、古い epoch の媒体を停止する（`awai-disk-format.md` §21.6）。**session id を high-water に
+使わない。** high-water は **volume / media の外**の device-protected store に置き、**端末 backup の復元で戻らない**前提。
+**抜け分類 (3)。**
 
 **受入の証拠:** 同じ instance の古い epoch を停止すること。別 instance（正当な clone）を誤検出しないこと。
-high-water の置き場を記録すること（置き場は未決定のまま）。
+**同一端末で新しい epoch を見た後の巻き戻しだけを検出し、別端末の `dd` 写しは検出しないこと。** high-water の置き場を
+記録すること（置き場は未決定のまま）。
 
 **依存:** 1。
 
@@ -279,14 +301,14 @@ high-water の置き場を記録すること（置き場は未決定のまま）
 ### 19. namespace closure の置き場
 
 **scope:** Local-Meta は内蔵 meta、Portable-USB は container 内に closure を固定する（`drive-host-ipc.md` §6.1）。
-改訂案 §11 の「closure の置き場」の未決定を、Drive の側でこの 2 つに決める。**抜け分類 (4)。**
+`awai-disk-format.md` §4.8（**main**）の固定に合わせる。**抜け分類 (4)。**
 
 **受入の証拠:** Local-Meta で USB 不在でも一覧と path 解決ができること。Portable で container を開けば closure が得られること。
 closure を `cache/` に置かないこと。
 
-**依存:** Kura の形式 PR（container の内部配置）。
+**依存:** `awai-disk-format.md`（main、container の内部配置）。
 
-**gate まで主張しないこと:** 「closure が 3 OS で同じ配置」。Kura の形式の確定後。
+**gate まで主張しないこと:** 「closure が 3 OS で同じ配置」。`awai-disk-format.md`（main）の形式の確定後。
 
 ### 20. device floor の `no-space` と quota 台帳
 
@@ -299,12 +321,12 @@ closure を `cache/` に置かないこと。
 
 **依存:** 1。
 
-**gate まで主張しないこと:** 「空き容量を保証する」。値は P0 と改訂案 §4.7 の仮置きの後。
+**gate まで主張しないこと:** 「空き容量を保証する」。値は P0 と `awai-disk-format.md` §4.7 の仮置きの後。
 
 ### 21. OS の backup / 索引からの除外
 
 **scope:** volume を OS の backup（Time Machine、Windows のバックアップ、Android の backup）と索引（Spotlight、Windows Search、
-MediaStore）から除外する。除外できない backup は、quiesce しない backup を不整合として扱う（改訂案 §18.3 #17）。**抜け分類 (6)。**
+MediaStore）から除外する。除外できない backup は、quiesce しない backup を不整合として扱う（`awai-disk-format.md` §18.3 #17）。**抜け分類 (6)。**
 
 **受入の証拠:** 各 OS で除外の設定が入ること。除外できない場合に「不整合として扱う」ことが記録されること。
 
