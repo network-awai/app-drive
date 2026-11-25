@@ -121,6 +121,7 @@ volume open 時に実行し、結果を永続化する probe（v1.0 §4）。測
 | 6.1.1 | `NameAccumulator` の 1 block あたりの cost（accumulate + hash-to-prime） | 64 GiB 級 = 262,144 block（64 × 1,073,741,824 ÷ 262,144）。browser の BigInt、Android、macOS の 3 つ | ms/block、合計、peak RSS。**3 つを別々に記録し、混ぜない** |
 | 6.1.2 | forest（HAMT）の構築・走査・lazy load の時間とメモリ | node / record を 1,000 / 10,000 / 100,000 / 262,144 で | 時間、peak RSS、lazy 走査で読んだ node の数 |
 | 6.1.3 | 1 file の block 数の上限を上げたときの往復 | 大きな file を streaming で seal / open | 一致、RSS、短読の拒否 |
+| 6.1.4 | **closure set と membership の規模** | 64 GiB profile（262,144 content block）で、closure CID 数（directory + HAMT node）、membership CID 数、control record のサイズ、>1 MiB の chunked closure の分割数 | 値と、`closure-too-large` の admission bound の根拠 |
 
 ### 6.2 IPC と転送
 
@@ -159,7 +160,7 @@ volume open 時に実行し、結果を永続化する probe（v1.0 §4）。測
 | N9 | `validUntil` を過ぎた検証役の記録で evict する | 「不明」として拒否する |
 | N10 | `storeClass 3` だけの R2 を名乗る | 独立ドメインとして数えないため拒否する |
 | N11 | 同じ `requestId` で違う payload を送る | `idempotency-conflict`。2 回目を書かない |
-| N12 | **fake fsync**（`F_FULLFSYNC` / `FlushFileBuffers` / `fsync` / `FileDescriptor.sync()` を呼ばずに成功を返す変異版） | 破壊試験（`F-loop-*` / `F-vm-*` / `F-emu`）で、directory entry か内容が失われること。**実行時の timing では検出できない**ので、変異版を明示的に作り、`destructive: yes` で記録する |
+| N12 | **fake fsync**（`F_FULLFSYNC` / `FlushFileBuffers` / `fsync` / `FileDescriptor.sync()` を呼ばずに成功を返す変異版） | 破壊試験（`F-loop-*` / `F-vm-*` / `F-emu`）で、directory entry か内容が失われること。**実行時の timing では検出できない**ので、変異版を明示的に作り、`destructive: yes` で記録する。**加えて `dtrace` / `strace` / ETW で、その syscall が発行されていないことを記録する**（発行の有無は破壊試験とは別の検査）。fault point は **ack 後 / fsync 前 / rename 前後 / checkpoint 前後**のそれぞれで取る。 |
 
 N5〜N7 は `F-loop-*` / `F-emu` で行う。N1〜N4 は `F-mem-store` と `F-tmp` で行える。**実機を使わない。**
 

@@ -3,7 +3,7 @@
 - **提案。Linear には未作成（Owner 承認後に起票）。** この文書は起票の案で、issue の作成・更新・状態変更を行っていない。
 - 日付: 2026-11-25（改訂: レビュー指摘の反映）
 - Tracking: [AWAI-4118](https://linear.app/kotobalabs/issue/AWAI-4118)（この作業は Orca Item #302。v1.0 の Item #295 は Organizer の item）
-- 根拠: AWAI-4118 確定設計 v1.0 §7、[drive-host-ipc.md](drive-host-ipc.md)、[portable-usb-custody.md](portable-usb-custody.md)、[scalable-sync-design.md](scalable-sync-design.md) §4.8・§4.9・§8、[p0-measurement-plan.md](p0-measurement-plan.md)、`network-awai/network-awai-apex/docs/awai-disk-format.md`（**main**。PR #381 は 2026-11-25 にマージ済み）。PR #382 は未マージ（head `0688afd6`）で、この提案は依存しない。
+- 根拠: AWAI-4118 確定設計 v1.0 §7、[drive-host-ipc.md](drive-host-ipc.md)、[portable-usb-custody.md](portable-usb-custody.md)、[scalable-sync-design.md](scalable-sync-design.md) §4.8・§4.9・§8、[p0-measurement-plan.md](p0-measurement-plan.md)、`network-awai/network-awai-apex/docs/awai-disk-format.md`（**main**。PR #381 `b2a82b5d` と PR #382 `1ef51688` を含む）。
 - 起票の単位は「別の PR にできる作業」。依存は実装の順序で、番号は優先順位ではない。**gate が通るまで、それぞれの「主張しないこと」を主張しない。**
 - 前版からの変更: #1・#3・#4・#6・#7・#9・#10・#12・#14 の受入と依存を修正し、#15〜#23 を追加した（計 23 件）。#6↔#7 の循環と #9 の自己依存 D3 を解消した。
 
@@ -16,7 +16,7 @@
 | 3 | peer 認証、client の namespace / quota、cross-client の pin 保護 | app-drive | none | 2 |
 | 4 | `request-id` の冪等性と `get-commit-status` | app-drive | none | 2, 3 |
 | 5 | OS 統合アダプタ（File Provider / DocumentsProvider / WinFsp / FUSE） | app-drive | none | 2, 3 |
-| 6 | Portable-USB の container v3（D8）の実装 | apex（`awai-disk-format.md`）+ app-drive | external crypto review | `awai-disk-format.md`（main、#381 マージ済み） |
+| 6 | Portable-USB の container v3（D8）の実装 | apex（`awai-disk-format.md`）+ app-drive | external crypto review | `awai-disk-format.md`（main、#381・#382） |
 | 7 | OOB ペアリング、portable custody export、監査 record | app-drive | owner decision（鍵操作） | 6 |
 | 8 | forest root のローテーション、copy 移行、drill | app-drive + app-itonami-yataverse | owner decision（鍵操作） | 6, 10 |
 | 9 | §4.8 の namespace closure の退避、repack、Stage 1 | app-drive | none | P0, W1, W2, W3, D1, D2, 19 |
@@ -65,8 +65,9 @@ Windows の named pipe、Linux の Unix socket、Android の AIDL + `ParcelFileD
 
 **受入の証拠:** 未知の版を `version-unsupported` で拒否すること。1 MiB を超える制御メッセージを `too-large` で拒否すること。
 bytes が inline の base64 で運ばれないこと。transport ごとに同じ schema で往復できること。**`set-closure` と `get-volume-status` が
-往復すること。** **負の対照: false CID は `cid-mismatch`、short read は拒否、262,144 B を超える block は `too-large`、
-symlink の `dataHandle` は拒否（`O_NOFOLLOW`）。**
+往復すること。** **`set-closure` の paging**: >1 MiB の closure が `chunked` で運ばれ、最終 digest / 署名の検証後に
+原子的に swap されること。signature 欠落と `rootCid` 不一致が拒否されること。** **負の対照: false CID は `cid-mismatch`、
+short read は拒否、262,144 B を超える block は `too-large`、directory / block / char / symlink の `dataHandle` は拒否。**
 
 **依存:** 1。
 
@@ -79,14 +80,17 @@ symlink の `dataHandle` は拒否（`O_NOFOLLOW`）。**
 （`drive-host-ipc.md` §3・§6）を実装する。**client から host の認証**（署名 / package identity、または pin した host 公開鍵との
 challenge-response）と endpoint squat の拒否も含む。**署名済み namespace closure と namespace capability**（opaque handle、
 または `(clientId, namespace root CID, closure version)` への MAC）を control record に保持し、`set-closure` の検証・
-原子的更新・`closure-unknown` の拒否を実装する。**pin は自分の closure 内に限定する。** 監査 record は append-only で、
+原子的更新・`closure-unknown` の拒否を実装する。**pin は自分の membership 内に限定する。** 監査 record は append-only で、
 hash chain + keyed MAC を持ち、秘密値を含めない。
 
 **受入の証拠:** 未認証の peer が `unauthorized` で閉じられること。namespace の外の読み書きが拒否されること。
 client A の pin を client B が evict できず、拒否が監査 record に残ること。予約が取れない `put` が bytes を書かないこと。
-**pin が quota を二重に消費せず、closure 外の pin が `closure-unknown` になること。** 偽 host（pin した鍵と違う host）に
-繋がないこと。**未登録・古い・署名不一致の closure で `put` / `get` / `evict` / `pin` が拒否され、退避と closure 外の読みが
-止まること。** **負の対照: false CID（`cid-mismatch`）・short read・oversize block（`too-large`）を 2 と共有して確認する。**
+**pin が quota を二重に消費せず、membership 外の pin が `closure-unknown` になること。** 偽 host（pin した鍵と違う host）に
+繋がないこと。**未登録・古い・署名不一致の closure で `put` / `get` / `evict` / `pin` が拒否され、退避と membership 外の読みが
+止まること。** **新規 content CID の `put` が `set-closure` の事前登録なしで成立し、membership に追加されること。
+別 client が所有する CID の claim が `closure-conflict` で拒否されること。Portable の別端末移動後、container の signed
+manifest から membership が復元されること。** **負の対照: false CID（`cid-mismatch`）・short read・oversize block（`too-large`）を
+2 と共有して確認する。**
 
 **依存:** 2。
 
@@ -124,7 +128,7 @@ clone（別 instance）は別 host として開けること。**
 
 ### 6. Portable-USB の container v3（D8）
 
-**scope:** `awai-disk-format.md` §21（**main**、PR #381 マージ済み）に従い、hosted-file の暗号化単一コンテナ + sidecar を実装する。
+**scope:** `awai-disk-format.md` §21（**main**、#381・#382 反映済み）に従い、hosted-file の暗号化単一コンテナ + sidecar を実装する。
 `AES-256-GCM-SIV`、Argon2id + 256 bit の復旧鍵 + Passkey、AAD の canonical 形式と golden corpus、下降拒否、MAC 付き
 lease / epoch（`portable-usb-custody.md` §2）。**生の復旧鍵は媒体に置かず、媒体外で別保管する。**
 
@@ -167,14 +171,16 @@ lease release の順序。**実機の USB と実鍵では行わない。**
 
 ### 9. §4.8 の namespace closure の退避と Stage 1
 
-**scope:** 退避の単位を file content block にし、directory node と forest node を保護する。**署名済み closure の集合と
-protected set digest**（`set-closure`、`drive-host-ipc.md` §4.7）を退避の判定に使い、repack / compaction を実装し、
-Stage 1（`cache/` の LRU）を実装する（`scalable-sync-design.md` §4.8）。closure は Local-Meta で内蔵 meta、Portable で
-container 内に置く（19）。**closure 外の CID と pin は対象にしない。**
+**scope:** 退避の単位を file content block にし、directory node と forest node を保護する。**署名済み closure set と membership**
+（`set-closure` と `put`、`drive-host-ipc.md` §4.7）を退避の判定に使い、repack / compaction を実装し、
+Stage 1（`cache/` の LRU）を実装する（`scalable-sync-design.md` §4.8）。closure は Local-Meta で内蔵 meta の `closure/`、
+Portable で container 内に置く（19）。**closure 内の CID は退避しない。退避対象は closure 外の content block で、
+どの client からも pin されていないもの。**
 
 **受入の証拠:** `cache/` の block だけが消え、directory / forest node が残ること。部分退避を拒否すること。repack の後に
 CID が一致すること。N4（directory entry の欠落）が検出されること。**USB 不在でも一覧と path 解決ができること（Local-Meta）。**
-**closure が未登録・古い・署名不一致なら `closure-unknown` で退避しないこと。closure 外の pin を evict の根拠にしないこと。**
+**closure set の CID が退避されないこと。closure 外でも pin された content は退避されないこと。membership 外の pin が
+`closure-unknown` で拒否されること。**
 
 **依存:** P0, W1, W2, W3, D1, D2, 19。**D3 には依存しない**（この issue が D3 / Stage 1 である）。
 
@@ -246,13 +252,15 @@ loopback の結果を実機 USB の資格認定として扱わないこと。**
 
 **gate まで主張しないこと:** 「UI が完成した」。この issue は Gamen の設計を前提にし、UI の正本を持たない。
 
-### 15. サーバ commit の単調 epoch と `base-epoch` の設計
+### 15. サーバ commit の単調 epoch と `base-epoch` の設計・実装
 
-**scope:** Yataverse の入口に、lease と commit の**単調 epoch**、`base-epoch` の記録、古い `base-epoch` の commit の拒否を設計する。
-クライアント側のピン留め、または transparency log が前提であることを明記する（`awai-disk-format.md` §20 の 16）。実装はこの設計の後。
+**scope:** Yataverse の入口に、lease と commit の**単調 epoch**、`base-epoch` の記録、古い `base-epoch` の commit の拒否を
+**設計・実装する**。クライアント側のピン留め、または transparency log が前提であることを明記する
+（`awai-disk-format.md` §20 #16）。**サーバ単調 epoch の実装と受入まで含める**（分割する場合は子 #24 を新設し、
+#12 から依存させる。その場合 #15 は設計のままにしない）。
 
-**受入の証拠:** 設計文書（`app-itonami-yataverse` の docs）。古い `base-epoch` の拒否の型と、同じ内容の再送の冪等性。
-**実装と受入は別 issue。**
+**受入の証拠:** 設計文書（`app-itonami-yataverse` の docs）に加えて、**実装**: 古い `base-epoch` の commit を型付きで
+拒否し、同じ内容の再送が冪等で、host の再起動後も epoch が単調であること。**実装と受入を #15 から外さない。**
 
 **依存:** なし。
 
@@ -300,7 +308,7 @@ open 回数（単調）」）を永続化し、古い epoch の媒体を停止�
 
 ### 19. namespace closure の置き場
 
-**scope:** Local-Meta は内蔵 meta、Portable-USB は container 内に closure を固定する（`drive-host-ipc.md` §6.1）。
+**scope:** Local-Meta は内蔵 meta の `closure/`、Portable-USB は container 内に closure を固定する（`drive-host-ipc.md` §6.1）。
 `awai-disk-format.md` §4.8（**main**）の固定に合わせる。**抜け分類 (4)。**
 
 **受入の証拠:** Local-Meta で USB 不在でも一覧と path 解決ができること。Portable で container を開けば closure が得られること。

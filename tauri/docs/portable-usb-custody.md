@@ -48,7 +48,7 @@
 
 - slot header に**最小の writer 版**（`minWriterVersion`）を記録する。
 - 読み手は、自分の版が `minWriterVersion` より低ければ **read-only** で開く（v3 の外側を読める場合）。KDF 引数がその版の最小より弱い slot は**使わない**（拒否であって、弱い方で開くのではない）。
-- 旧いアプリが v3 の外側（sidecar・container 外殻）または形式を読めない場合は、**`stopped`** に固定する（`version-unsupported` を返し、読まない・書かない。`awai-disk-format.md` §14・§21.4）。**`read-only` は「v3 を読めるが、`minWriterVersion` が自分の版より新しくて書けない」場合だけ**に使う。**形式を読めない旧アプリを `read-only` の例にしない。**
+- 旧いアプリが v3 の外側（sidecar・container 外殻）または形式を読めない場合は、**`stopped`** に固定する（`version-unsupported` を返し、読まない・書かない）。**Drive host の契約として `stopped` を採る**（`awai-disk-format.md` §21.4 は R0 固定待ちだが、外側を読めない媒体は `read-only` にできないため）。**`read-only` は「v3 を読めるが、`minWriterVersion` が自分の版より新しくて書けない」場合だけ**に使う。**形式を読めない旧アプリを `read-only` の例にしない。**
 - `minWriterVersion` は AAD に含める。**下げる操作を作らない。** 下げられるなら下降の拒否は意味を持たない。
 
 ### 2.4 lease と epoch
@@ -177,7 +177,7 @@ v1.0 §4 の規則を、媒体の運用に写す。
 | 同じ lineage + 同じ instance + 競合する epoch（同時、または lease が生きている） | **fork** | **停止**（`awai-disk-format.md` §14。既定では読みも拒否。`inspect` だけ許す）。epoch を進めない |
 | `dd` で複製した同じ instance の 2 つ | 上の fork の規則に当たる | **停止**。片方を自動で選ばない。**運用のヒントであって安全な経路ではない** |
 
-**「停止」の語義（`awai-disk-format.md` §14）:** 書き込みと回復を拒否し、**読み出しも拒否する**。診断用の読み取り専用 open（`inspect`）だけが、明示の操作で許される。**`read-only`（grade C や旧アプリの media downgrade のように読みを許す状態）と混ぜない。** デバイス集合の不一致・WAL の鎖切れ・root slot が成立しない場合・fork は、すべて「停止」である。
+**「停止」の語義（`awai-disk-format.md` §14）:** 書き込みと回復を拒否し、**読み出しも拒否する**。診断用の読み取り専用 open（`inspect`）だけが、明示の操作で許される。**`read-only`（grade C、または v3 を読めるが `minWriterVersion` が新しくて書けない場合）と混ぜない。** デバイス集合の不一致・WAL の鎖切れ・root slot が成立しない場合・fork は、すべて「停止」である。
 
 - **`dd` の写しを「バックアップ」として扱わない。** instance が同じなので、両方を開くと fork になる。fork の検出は「同じ lineage + 同じ instance + 競合 epoch」で行い、**自動で片方を選ばない**（v1.0 §4）。
 - clone は instance が違うので開ける。ただし clone した媒体を両方書き換えると、後で forest の merge が要る（`scalable-sync-design.md` §4.4 の merge は未実装）。**clone を「同期の代替」と呼ばない。**
@@ -203,6 +203,7 @@ v1.0 §4 の規則を、媒体の運用に写す。
 3. **readback で全 Pack を検証する**（`scalable-sync-design.md` §4.7 の `committed` 条件）。
 4. **新しい root を control record に書く。** これで新しい capability が正本になる。**以後の新 root のデータのカットオフ**（旧 capability は新 root を復号できず、新 root へ書けない）。**旧 root への書込みは、旧 root が配信され lease が生きている間は可能**（server 強制は W4 以降）。
 5. **旧 root を配信から外す。** 旧 lease を renew しない → 期限切れ / release。**新 root と新 Pack の lease** の検証役 `policy-satisfied`（R2 以上、`validUntil` 内）を確認する。**旧 root の `policy-satisfied` は失効の条件ではない。** これは**暗号学的無効化ではない**（既に取得されたコピーは読める）。
+   - **失効の表明は 5 の後に行う。** 5 の前に表明すると、旧 root がまだ配信されている間に巻き戻せる（`awai-disk-format.md` §21.7 の (5)(6) と同じ順序）。
 6. **旧 block を回収する。** lease の解放と、同じ CID を指す他の lease が無いことの確認後（`app-itonami-yataverse/docs/retention-design.md` §10 の解放条件）。順序は「配信から外す → lease を release → 期限 / lock の制約を待つ → 削除」。**回収は別 gate。**
 
 - 1〜3 の間、旧 capability は**新 root を読めない**（新 root への書込みもできない）。**手順の途中で「すべて失効した」と表示しない。**
@@ -273,6 +274,7 @@ broker の承認回数（B の定義で変わる。数値は [bounded-batch-cons
 - **外部暗号レビュー。** `awai-disk-format.md` §17.2 の順序（`R0 固定 → 外部暗号レビュー（R3 実装着手の前提）→ R3 実装 → R3 出口（指摘の反映確認）→ R2 形式凍結`）に従う。**「出口 = レビュー」とは書かない。** レビューは未発注・未課金（この task の範囲外）。
 - **JS / WebView のメモリ 0 埋めは保証しない。** 平文と鍵の扱いは **Rust / secure buffer を前提**にする（WebView の GC とコピーを制御できない）。
 - **WNFS の `XChaCha20-Poly1305` の nonce の作り方**（session id からの導出を含む）は、**外部暗号レビューの対象**である（`awai-disk-format.md` §15.5・§15.6・§17.2）。
+- **`NameAccumulator` による候補ファイル名の確認可能性**（ラベルからファイル名を推測・辞書攻撃できるか）も、**外部暗号レビューの確認項目**に含める。ラベルは 2048-bit の accumulator で、平文なしに候補を検証できる性質が、名前の秘匿に与える影響を評価する。
 - **`awai-disk-format.md` §21（v3）の bytes。** この文書は形式を確定しない。AAD の canonical 形式と golden corpus は `awai-disk-format.md`（main）と共通にする。
 - **性能。** §6.3 は見積りで、実測ではない。
 

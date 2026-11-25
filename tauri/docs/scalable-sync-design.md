@@ -210,8 +210,8 @@ ADR 0041 D2 により、判定は検証役が行い、provider・入口・その
 
 - 読むときは path を解決して（snapshot key）、必要な block の label を導き、その block だけを取得する。取った block は
   CID と AEAD で検証する。
-- namespace closure の node は常に local にある（退避しない）。**closure の置き場は profile で固定する。Local-Meta は内蔵 meta**
-  （USB 不在でも一覧と path 解決ができる）、**Portable-USB は container 内**（`drive-host-ipc.md` §6.1）。`cache/` に置かない。
+- namespace closure の node は常に local にある（退避しない）。**closure の置き場は profile で固定する。Local-Meta は内蔵 meta の
+  `closure/`**（USB 不在でも一覧と path 解決ができる）、**Portable-USB は container 内**（`drive-host-ipc.md` §6.1）。`cache/` に置かない。
   したがって path の解決に network は要らない。要るのは content block の取得だけである。
 - 全体の復元は、各 block を検証してから staging に書き、**すべて検証できてから**公開する。既存のファイルは上書きしない。
 

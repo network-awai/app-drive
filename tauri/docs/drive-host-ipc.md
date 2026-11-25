@@ -6,7 +6,7 @@
 - Tracking: [AWAI-4118](https://linear.app/kotobalabs/issue/AWAI-4118)（Orca Item #302）
 - **これは性能契約ではない。** IPC の実装、実機での認可の証明、遅延・throughput の数値を含まない。数値は P0 の測定後に決める（[p0-measurement-plan.md](p0-measurement-plan.md)）。
 - 関連: [scalable-sync-design.md](scalable-sync-design.md) §4.8・§4.9・§8、[encrypted-sync.md](encrypted-sync.md)、[portable-usb-custody.md](portable-usb-custody.md)、[p0-measurement-plan.md](p0-measurement-plan.md)、[awai-4118-child-issues.md](awai-4118-child-issues.md)
-- 形式の参照: `network-awai/network-awai-apex/docs/awai-disk-format.md`（**main**。PR #381 は 2026-11-25 に squash merge `b2a82b5d`）。§4.5（writer epoch / lease）、§4.6（移動・clone・fork）、§4.8（protected set digest）、§14（「停止」の語義）、§15.4（復旧鍵の生命周期）、§17.2（外部暗号レビューの順序）、§21.8（safe-eject）。PR #382（未マージ、head `0688afd6`）には依存しない。
+- 形式の参照: `network-awai/network-awai-apex/docs/awai-disk-format.md`（**main**。PR #381 `b2a82b5d` と PR #382 `1ef51688` を含む）。§4.5（writer epoch / lease）、§4.6（移動・clone・fork）、§4.8（closure の置き場 / protected set digest）、§14（「停止」の語義）、§15.4（復旧鍵の生命周期）、§17.2（外部暗号レビューの順序）、§21.4（AAD）、§21.7（失効の表明）、§21.8（safe-eject）。
 
 ## 1. 製品構成と `awai-disk-core` の独占
 
@@ -69,6 +69,7 @@ host は次の順で判断し、**どれにも当てはまらなければ writer
 | safe-eject | `evict` とは別の操作。**dirty を無くす → FLUSH → lease を明示 release（`state=released`）→ clean を記す**、の順で行う（`awai-disk-format.md` §21.8）。**必須なのは等級 A / B だけ**で、等級 C は書き込みも dirty も無いので release を書かず expiry に任せる。volume を close してから「取り外してよい」と言う。**close に失敗したら「取り外してよい」と言わない** |
 | open 中の upgrade | 旧 host は volume を close してから終了する。新 host は open からやり直す。**開いた volume の fd を新旧の間で渡さない**（版をまたぐ fd の互換を主張しない）。client は `host-restarting` を見て request-id を保ったまま再試行する |
 | grade 降格（A→C） | 直ちに書き込みを止める（`read-only`）。**残った dirty は、FLUSH できれば safe-eject の手順で閉じ、できなければ expiry と次回 open の回復に任せる。** 降格の後に新しい dirty を作らない（`awai-disk-format.md` §4.9） |
+| 等級 C の lease | 等級 C では lease を release しない（上の safe-eject のとおり）。**次の host は expiry まで待機**し、その間 `get-volume-status` は `state: read-only`、`reason: lease-held-by-previous-host` を返す。新しい dirty を作らず、expiry の後に open をやり直す |
 | Yataverse 単独 | §2.7 |
 
 **endpoint squat:** 同名の endpoint が既に居る場合、host はそれが自分の host か（§3.5 の host 認証）を確かめてから client になる。確かめられない endpoint には繋がない（偽 host に繋がない）。
@@ -245,12 +246,11 @@ Response {
 | Linux socket | `SCM_RIGHTS` で fd を渡す |
 | Android Binder | `ParcelFileDescriptor`（pipe） |
 
-- `put` は `{ path, size, cid, sha256, dataHandle }` を送る。**bytes は seal 済みの暗号文 block** で、`cid` と `sha256` は**暗号文**を対象とする。host は平文も E2EE 鍵も持たないので、復号も再暗号化もしない。**受信した bytes から CID を再計算し、申告 `cid` と一致しなければ `cid-mismatch` で拒否する**（`sha256` は補助で、CID の digest と一致させる）。
+- `put` は `{ path, size, cid, sha256, e2eePolicy, dataHandle }` を送る。**bytes は seal 済みの暗号文 block** で、`cid` と `sha256` は**暗号文**を対象とする。`e2eePolicy` は client の宣言で、host は**監査記録に残すだけ**（§9）。host は平文も E2EE 鍵も持たないので、復号も再暗号化もしない。**受信した bytes から CID を再計算し、申告 `cid` と一致しなければ `cid-mismatch` で拒否する**（`sha256` は補助で、CID の digest と一致させる）。
 - `put` は **`size <= 262,144`（256 KiB、WNFS block 上限）**を強制し、申告 `size` と実 bytes の一致も強制する。超過は **`too-large`**（quota の `no-space` と混ぜない）。
-- **`dataHandle` は regular file のみ**（`O_NOFOLLOW` で symlink を拒否）。宣言された長さを超えて読まない。
-- `get` は fd / stream を渡す**前に** block の CID を検証し、不一致なら返さない（`awai-disk-format.md` §7.3 の scrub と同じ規則）。
-- `path` は**監査用の opaque label** に留める。host は `..` を解決しない（path の解決は WNFS の closure を持つ client が行う）。host は label の文字列を認可に使わない。
-- namespace の認可は、`clientId` に結び付いた **namespace capability**（§6.1。将来は W4 の write proof）で行う。path や CID の自己申告では認可しない。
+- **`dataHandle` は regular file、または pipe / socketpair**を許可する。fd は `fstat` で **`S_ISREG` / `S_ISFIFO` / `S_ISSOCK`** を許可し、**directory / block device / char device / symlink を拒否**する。**`O_NOFOLLOW` は path から open する場合の条件**で、fd を受ける経路では条件にしない（fd の種類検査と分離する）。Windows の `data-open` は **pipe frame の id** であり、file ではない。
+- `get` は fd / stream を渡す**前に** block の CID を検証し、不一致なら返さない（`awai-disk-format.md` §7.3 の scrub と同じ規則）。返すのは **membership または closure set の CID** だけである。
+- namespace の認可は、`clientId` に結び付いた **namespace capability**（§6.1。将来は W4 の write proof）で行う。capability を検証したら、CID が **membership** に無ければ追加する（closure set への事前登録は不要）。別 client が所有する CID は **`closure-conflict`**。path や CID の自己申告だけでは認可しない。
 - **inline の base64 を作らない。** 現行の 65531 byte × base64 の経路（`encrypted-sync.md`、`scalable-sync-design.md` §4.6）はこの契約の外にある。
 
 ### 4.4 backpressure・timeout・cancellation・順序
@@ -269,15 +269,17 @@ Response {
 | `version-unsupported` | 版が範囲外 | 再試行しない。app の更新を促す |
 | `too-large` | 制御メッセージ、宣言された bytes、または 1 block の上限（262,144 B）を超えた | 要求を分割するか中止する |
 | `cid-mismatch` | 受信した bytes から再計算した CID が申告と違う | 再送しない。client の seal / hash を調べる |
-| `closure-unknown` | 署名済み closure が未登録・古い・署名 / digest 不一致で、その CID の所有を確認できない | 再試行しない。`set-closure` をやり直す |
+| `closure-unknown` | 未登録、または namespace capability の不一致**だけ** | 再試行しない。登録状態を確認する |
 | `closure-stale` | `set-closure` の epoch が古い | 現在の epoch を取得して作り直す |
-| `closure-bad-signature` | `set-closure` の署名が検証できない | 再試行しない |
-| `closure-digest-mismatch` | `set-closure` の digest が closure と一致しない | 再試行しない |
+| `closure-bad-signature` | 署名検証の失敗 | 再試行しない |
+| `closure-digest-mismatch` | `digest` が closure / membership と一致しない | 再試行しない |
+| `closure-conflict` | 別 client が所有する CID を含む | 再試行しない。共有は v1 の対象外 |
+| `closure-too-large` | admission bound（CID 数 / bytes）の超過 | 要求を分割する（`chunked` でも上限を超える場合は不可） |
 | `busy` | volume が別の writer に握られている、または期限切れ | 待って再試行してよい（同じ requestId） |
 | `volume-absent` | volume、または書込み先の device が無い（未接続、取り外し済み、`degraded-pack-absent`） | UI に「媒体が無い」を出す。書き込みを再試行しない |
 | `no-space` | device の空き容量の下限（device floor）に当たった（`awai-disk-format.md` §4.7） | 退避か削除を user に求める。**host は証跡や未退避の data を消さない** |
 | `read-only` | grade C など、読みを許す状態 | 読み取りを続ける。UI に理由を出す |
-| `stopped` | 停止中（fork、回復の失敗、デバイス集合の不一致）。既定では読みも拒否 | 再試行しない。`inspect`（診断のみ。書込み・回復なし）の案内と理由を出す |
+| `stopped` | 停止中（fork、回復の失敗、デバイス集合の不一致）。既定では読みも拒否 | 再試行しない。`inspect`（fork は診断可。鎖切れ・回復失敗は「整合読みを保証しない」明示フラグ必須）の案内と理由を出す |
 | `quota-exceeded` | client の quota（予約 + 実使用）を超える | 退避か削除を user に求める。**host が勝手に他人の領域を削らない** |
 | `idempotency-conflict` | 同じ `requestId` で違う内容 | 再試行しない。新しい `requestId` を使う |
 | `commit-unknown` | 結果を確定できない（host の crash、記録の期限切れ） | **盲目的に再送しない。** §5 の手順に従う |
@@ -313,27 +315,75 @@ Response {
 - **`volume-absent` と `degraded-pack-absent` は別の状態**である。前者は読む対象が無い（Local-Meta の volume 未接続、Portable の媒体不在）、後者は Local-Meta の `optional` の pack device だけが無く、内蔵 meta は読める。`get-volume-status` は必ずこの 2 つを区別して返す。
 - **error code と `state` は別**である。`state` は `get-volume-status` が返す現在の状態、error code は操作の拒否理由。`read-only` / `stopped` / `volume-absent` は両方に現れるが、意味は上の表のとおり。
 - `degraded-pack-absent` は「壊れた」ではなく「`optional` の role が無い」状態である（`awai-disk-format.md` §4.4）。`stopped` と混ぜない。
-- `stopped` の `inspect` は**状態を変えない**。診断の読み取りだけで、書込みも回復もしない。
+- `stopped` の `inspect` は**状態を変えない**。診断の読み取りだけで、書込みも回復もしない。**fork の診断は可。WAL の鎖切れ・回復失敗のときは、「整合読みを保証しない」明示フラグを要求し、既定では読ませない**（§4.5）。
 
-### 4.7 `set-closure`（署名済み namespace closure / protected set）
+### 4.7 `set-closure` と 2 つの集合（署名済み closure / membership）
 
-namespace capability の根拠になる集合を、client が署名して host に渡す。**host は CID 集合そのものを認可の根拠にせず、署名を検証した集合を capability に結び付けて保持する**（§6.1）。別名 `set-protected-set` は併記だけにし、op 名は `set-closure` とする。
+集合を **2 つに分ける**。混ぜない。
 
-入力（canonical DAG-CBOR）:
+| 集合 | 中身 | 置き場 | 更新 |
+|---|---|---|---|
+| **closure set** | WNFS の **directory node と forest HAMT node の CID のみ** | `closure/`（Local-Meta は内蔵 meta、Portable-USB は container 内）。退避しない | `set-closure` |
+| **namespace membership** | client が所有する **file content block の CID**（role = content） | host の control record。Portable-USB では container 内の signed manifest にも置く | **`put`** が namespace capability を検証して追加 |
+
+- **`protected set digest` は host が `closure set + pin set + catalog/root` から計算する。** `set-closure` の CID リストを protected set と呼ばない（用語を混ぜない）。
+- **退避の対象**は、content block で、**closure set に含まれず、どの client からも pin されていない**ものだけである。closure set の CID は退避しない。
+- 新規 content CID の `put` は、**`set-closure` への事前登録を必要としない**（初回・新規 block の `put` が成立する）。`put` が capability を検証して membership に追加する。
+
+#### wire schema
+
+入力は canonical DAG-CBOR:
 
 ```text
-{ v, namespace, epoch, closure: [CID...], digest, signer }
+{
+  v, namespaceId, rootCid, epoch,
+  mode: "inline" | "chunked",
+  closure: [binary CID (36 B)...]          // inline のとき。昇順・重複なし
+  // chunked のとき: dataHandle / chunkStream + chunkDigests + chunkCount
+  membershipDigest,
+  digest,
+  signer: { keyId, alg },
+  signature
+}
 ```
 
-- `closure` は CID の昇順・重複なし。`digest` は closure の canonical bytes の sha256。`signer` は owner または許可された client の鍵。
-- host は **署名・epoch・digest** を検証する。`namespace` は登録済みで、`clientId` の capability と一致すること。
-- 検証に通ったら、**per-client の CID 所有集合**と **protected set digest**（`awai-disk-format.md` §4.8 / §16.1 への入力）を**原子的に**更新する。途中状態を公開しない（古い集合と新しい集合の混在を作らない）。
-- 拒否: `closure-stale`（epoch が古い）、`closure-digest-mismatch`、`closure-bad-signature`、`closure-unknown`（未登録 namespace / capability 不一致）。
-- host は集合の**版**（`epoch`）を返す。client は版だけを保持し、CID 集合を認可の根拠として送り直さない。
+- `closure` は **binary CID 36 B** の昇順・重複なし。`digest` は closure の canonical bytes の sha256。
+- **署名対象**は `v`、`namespaceId`、`rootCid`、`epoch`、`digest` を含む。`signer` の鍵一覧（owner / 許可 client の `keyId`、失効、rotate）は host の control record に保持する。Portable-USB では **container 内の signed manifest** にも置く（下記）。
+- `rootCid` は namespace capability に束縛する。epoch を跨いで変わる場合は新しい署名を要求する。**root の連続性（前の root からの到達）は WNFS を持つ client が検証する**（host は復号しない）。
+- `membershipDigest` は host が保持する membership の digest。client が現在知っている値を送り、host は一致を確認する（不一致は `closure-digest-mismatch`）。**content CID の登録は `set-closure` ではなく `put` が行う。**
+- **1 MiB の制御上限を超える closure** は `mode: "chunked"` で、chunk digest と最終の署名付き commit（または `dataHandle` のページ）として運ぶ。**最終 digest と署名の検証後に原子的に swap** し、途中状態を公開しない。
+- admission bound（最大 CID 数 / 最大 bytes）を設ける。超過は **`closure-too-large`**。値は **未決定**（P0 で 64 GiB profile の CID 数と control record サイズを測って決める）。
+- `set-closure` の応答は `epoch` と `membershipDigest`（更新後の値）。client はその 2 つを保持し、CID 集合を認可の根拠として送り直さない。
 
-`put` / `get` / `pin` / `evict` は、対象 CID がその client の集合に入ることを検証する。**`pin` も自分の closure 内に限定**する（closure 外の pin で quota と protected set を埋めさせない）。集合が未登録・古い・署名不一致なら **`closure-unknown`** を返し、**退避と closure 外の読みを拒否する**。
+#### 所有の排他
 
-**W4 までの正直な限界:** host が保持するのは、**認証済み client の署名付き自己申告 closure**である。host は WNFS を復号しないので、closure が「現在の root から到達する」ことの暗号学的な証明を検証しない。**cross-client の分離は transport identity の強さまで**（§3.6）。W4 の write proof が入るまで、これを「検証済み closure」と呼ばない（本文では「署名済み closure」と書く）。
+- **CID の所有は排他**である。別 client が既に所有する CID を含む `set-closure` / `put` の claim は **`closure-conflict`** で拒否する。
+- **共有 CID は v1 の対象外。** 将来は owner の承認と参照カウントで定義する（この文書では決めない）。
+
+#### エラー
+
+| code | 意味 |
+|---|---|
+| `closure-unknown` | 未登録、または namespace capability の不一致**だけ** |
+| `closure-stale` | `set-closure` の epoch が古い |
+| `closure-bad-signature` | 署名検証の失敗 |
+| `closure-digest-mismatch` | `digest` が closure / membership と一致しない |
+| `closure-conflict` | 別 client が所有する CID を含む |
+| `closure-too-large` | admission bound の超過 |
+
+#### 認可の原則
+
+**署名を検証していない集合を認可に使わない。** 使うのは、検証に通った closure set と、`put` が更新した membership だけである。
+
+`put` / `get` / `pin` / `evict` は membership を検査する。`get` は closure set の CID も返せる（closure は保護域である）。`pin` は **membership の content CID だけ**を対象にする。membership が未登録・古い・署名不一致なら `closure-unknown` を返し、**退避と membership 外の読みを拒否する**。
+
+**W4 までの正直な限界:** host が保持するのは、認証済み client の**署名付き自己申告 closure**である。host は WNFS を復号しないので、closure が「現在の root から到達する」ことの暗号学的な証明を検証しない。**cross-client の分離は transport identity の強さまで**（§3.6）。W4 の write proof が入るまで、これを「検証済み closure」と呼ばない（本文では「署名済み closure」と書く）。
+
+#### Portable-USB の可搬性
+
+- membership（所有集合）と署名付き closure manifest を、**container 内の signed manifest** に置く。端末の control record だけに置かない。
+- 別端末へ移したとき、新しい host は manifest の署名を検証して所有集合を再構成する。**端末の control record が無くても、container を開ける者が所有集合を検証できる。**
+- 端末の control record は **サイズ上限・暗号化・backup からの除外**を必須にする（値は未決定）。
 
 ## 5. 冪等性と commit の状態
 
@@ -361,7 +411,7 @@ namespace capability の根拠になる集合を、client が署名して host �
 
 ### 5.4 記録の寿命と置き場所
 
-- 置き場所: host の**device-protected な control record**（volume の外）。`encrypted-sync.md` の control record と同じ扱いで、退避の対象にしない。
+- 置き場所: host の**device-protected な control record**（volume の外）。`encrypted-sync.md` の control record と同じ扱いで、退避の対象にしない。**サイズ上限・暗号化・backup からの除外**を必須にする（値は未決定）。Portable-USB では membership と signed manifest の写しを container 内にも置く（§4.7）。
 - 寿命: 最初の受付から **30 日**、または client の `get-commit-status` が `committed` / `failed` を返した後で **24 時間**のどちらか長い方。期限を過ぎたら `unknown`（`commit-unknown`）を返す。
 - 保持数の上限は **未決定**（P0 で件数と大きさを測る）。上限に達した場合は**古い記録から `unknown` にする**（結果を捏造しない）。
 - **限界:** 現行の Disk Format は WAL frame に `requestId` を持たない。`awai-disk-format.md` §4.3 の frame は `writer epoch` と `session id` を足すが、`requestId` は無い。したがって host の crash 時に「WAL に書いたが記録を書く前」だった要求は `unknown` になる。これを `committed` / `failed` に縮めるには、Kura 側の別 issue（または `awai-disk-format.md` §11 の未決定）で WAL frame に `requestId`（または host の記録の digest）を載せる必要がある。**それまでは `unknown` を正しい答えとして扱う。**
@@ -376,10 +426,10 @@ namespace capability の根拠になる集合を、client が署名して host �
 ### 6.1 clientId と namespace
 
 - `clientId` は「認証した peer の product identity + 署名 identity の digest + その install の instance id」から host が作る。**client は名乗らない。**
-- **namespace capability** は、**opaque handle**、または **`(clientId, namespace root CID, closure version)` への MAC** として host の control record に保持する。client に渡すのは **handle と版だけ**で、CID 集合そのものを認可の根拠にしない。集合は §4.7 の `set-closure` で更新する。
+- **namespace capability** は、**opaque handle**、または **`(clientId, namespace root CID, closure version)` への MAC** として host の control record に保持する。client に渡すのは **handle と版だけ**で、CID 集合そのものを認可の根拠にしない。**closure set は §4.7 の `set-closure`、membership は `put` が更新する。**
 - namespace は、host が `clientId` に割り当てる capability の範囲で、owner の WNFS 名前空間の `clients/<clientId>` に対応する。**path の解決は client が行い、host は opaque label と CID だけを扱う**（§4.3）。host は E2EE の鍵を持たないので、directory の中身を復号して path を解決しない。
-- **namespace closure の置き場:** Local-Meta は**内蔵 meta に固定**（USB 不在でも一覧と path 解決ができる）。Portable-USB は**container 内に固定**する。`awai-disk-format.md` §4.8（main）の固定に合わせる。
-- `put` の `path` は **opaque label** で、host は `..` を解決しない（§4.3）。label と CID は namespace capability の中でだけ意味を持つ。他の client の namespace を指す参照と、closure の外の CID の読み取りは `unauthorized`。
+- **namespace closure の置き場:** Local-Meta は**内蔵 meta の `closure/`**（USB 不在でも一覧と path 解決ができる）、Portable-USB は**container 内**に固定する。`awai-disk-format.md` §4.8（main）の固定に合わせる。
+- `put` の `path` は **opaque label** で、host は `..` を解決しない（§4.3）。label と CID は namespace capability の中でだけ意味を持つ。他の client の namespace を指す参照と、membership の外の CID の読み取りは `unauthorized`。
 - 読み取り専用の client（`view: read-only`）は、変更系の op すべてで `read-only`。
 
 ### 6.2 quota
@@ -393,7 +443,7 @@ namespace capability の根拠になる集合を、client が署名して host �
 
 ### 6.3 pin の所有と cross-client の保護
 
-- `pin` は `(target, owner: clientId)` の record を持つ。**target はその client の署名済み closure の中に限る**（§4.7）。closure 外の pin は `closure-unknown`。
+- `pin` は `(target, owner: clientId)` の record を持つ。**target はその client の membership の content CID に限る**（§4.7）。membership 外の pin は `closure-unknown`、closure set の node は pin の対象にしない（保護域である）。
 - client B の `evict` が client A の pin を指したら、**`unauthorized` で拒否する**。判断は「target のすべての pin の owner が呼び出し元と一致するか」。
 - 拒否と許可のどちらも、**append-only の監査記録**に残す: `requestId`、`clientId`、op、対象、判断、理由、時刻。**秘密値（鍵、capability、平文）を記録しない。**
 - 監査記録は host の control record に置き、client からは読めない（host の UI と、owner の明示的な操作だけが読む）。
@@ -441,8 +491,8 @@ namespace capability の根拠になる集合を、client が署名して host �
 
 - UI の文言・状態遷移・figma は Gamen の UI 設計（AWAI-4118 v1.0 §7 の 3、`gamen-sekkei`）が持つ。ここでは「UI が区別しなければならない状態」だけを列挙し、UI を設計しない。
 - host は「どの client が何をしたか」を監査記録に残すが、**平文・E2EE の鍵・E2EE の capability を残さない**。**namespace capability は host が保持する**（§6.1。E2EE の capability とは別）。監査記録は **hash chain + keyed MAC** で完全性（追記・削除の検出）を保つ。記録の暗号化と保持期間は **未決定**。
-- **host は可搬媒体の E2EE-only を検証しない。** E2EE-only は **client の義務**であり、host の暗号学的保証ではない。host は受け取った block が暗号文であること（復号できないこと）を検査しない。Local-Meta の USB に E2EE でない block を置かない規則（`awai-disk-format.md` §4.4）は client と format の側が守る。
-- `stopped` の `inspect` を許すのは**診断のためだけ**である。書込みも回復もしない（§4.6）。
+- **host は可搬媒体の E2EE-only を検証しない。** E2EE-only は **client の義務**であり、host の暗号学的保証ではない。host は受け取った block が暗号文であること（復号できないこと）を検査しない。**そのため、Local-Meta の USB に OS の暗号化が無い場合、client の不具合は平文の漏えいになりうる。** `put` は client の **`e2eePolicy` assertion**（自分が E2EE 済みの block だけを送るという宣言）を運び、host は**監査記録に残すだけ**で、**検証したとは書かない**。Local-Meta の USB に E2EE でない block を置かない規則（`awai-disk-format.md` §4.4）は client と format の側が守る。
+- `stopped` の `inspect` を許すのは**診断のためだけ**である。書込みも回復もしない（§4.6）。**fork の診断は可。WAL の鎖切れ・回復失敗のときは「整合読みを保証しない」明示フラグを要求し、既定では読ませない。**
 
 ## 10. 未決定・未測定
 
@@ -459,8 +509,9 @@ namespace capability の根拠になる集合を、client が署名して host �
 11. **host の公開鍵 pin（§3.5）の初期配布と更新**。install 時にどう pin するか、鍵の変更をどう user に確認させるか。
 12. **サーバ commit の単調 epoch と、古い `base-epoch` の拒否**（子 issue 15）。設計が入るまで、オンライン巻き戻し検出を主張しない（§9）。
 13. **Android の複数 volume**。v1 は 1 host 1 volume（§2.5）。
-14. **`stopped` からの `inspect` の許し方**（誰が、どの操作で）。状態を変えないことだけ決めている（§4.6）。
+14. **`stopped` からの `inspect` の許し方**（誰が、どの操作で）。fork は診断可、鎖切れ・回復失敗は「整合読みを保証しない」明示フラグ必須で既定は拒否。状態を変えないことだけ決めている（§4.6）。
 15. **`no-space` の下限の値**（device ごと。`awai-disk-format.md` §4.7 は仮置きで、測定の前に gate にしない）。
 16. **`degraded-pack-absent` の書き込み拒否の code**。現案は `volume-absent`（§4.6）。
-17. **`set-closure` の wire 形式**: `digest` の canonical bytes、署名の形式（鍵の種類）、`epoch` の増やし方、`namespace` の識別子。W4 の write proof が入るまで、closure の到達性は暗号学的に証明されない（§4.7）。
+17. **`set-closure` の wire 形式と運用**: `digest` の canonical bytes、署名の形式（鍵の種類）、`epoch` の増やし方、`namespaceId` の識別子、**admission bound（最大 CID 数 / 最大 bytes）**、`chunked` の chunk 分割と再開、**CID 所有の排他（共有 CID は v1 対象外）**、Portable の signed manifest の形式、control record の**サイズ上限・暗号化・backup 除外**。W4 の write proof が入るまで、closure の到達性は暗号学的に証明されない（§4.7）。
 18. **監査記録の hash chain / keyed MAC の鍵の出所と、Portable-USB での可搬性**（媒体に置かないことを既定にする。持ち運ぶ場合の形式は未決定）。
+19. **`e2eePolicy` assertion の形式**（client が何を宣言するか、監査記録の field、失効した宣言の扱い）。host は検証しない（§9）。
