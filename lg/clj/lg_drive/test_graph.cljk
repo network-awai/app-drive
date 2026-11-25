@@ -6,6 +6,7 @@
             [kotoba.lang.text :as str]
             [langgraph.graph :as g]
             [lg-drive.graphs.health :as health]
+            [lg-drive.handlers :as h]
             [lg-drive.server :as server]
             [lg-drive.kotoba-datomic :as kd]
             [lg-drive.store :as store]))
@@ -23,18 +24,23 @@
     (is (true? (get-in res [:json "ok"])))
     (is (= "lg-drive" (get-in res [:json "app"])))))
 
-(deftest test-route-xrpc-create-get
+(deftest test-route-xrpc-create-retired-get-found
   (let [st (store/fake-store)
         created (server/route st {:method :post
                                   :path "/xrpc/ai.etzhayyim.apps.drive.filesCreate"
-                                  :body {"name" "r.txt" "sizeBytes" 5}})
-        fid (get-in created [:json "fileId"])
+                                  :expected-api-key "secret" :x-api-key "secret"
+                                  :body {"name" "r.txt" "sizeBytes" 5}})]
+    (is (= 410 (:status created)))
+    (is (empty? (store/all-file-attrs st))))
+  (let [st (store/fake-store)
+        fid (get (h/files-create st {"name" "r.txt" "sizeBytes" 5}) "fileId")
         got (server/route st {:method :get
                               :path "/xrpc/ai.etzhayyim.apps.drive.filesGet"
+                              :expected-api-key "secret" :x-api-key "secret"
                               :query {"fileId" fid}})]
-    (is (= 200 (:status created)))
-    (is (= "r.txt" (get-in created [:json "file" "name"])))
-    (is (true? (get-in got [:json "found"])))))
+    (is (= 200 (:status got)))
+    (is (true? (get-in got [:json "found"])))
+    (is (= "r.txt" (get-in got [:json "file" "name"])))))
 
 (deftest test-parse-query
   (is (= {"fileId" "abc" "q" "a b"} (server/parse-query "fileId=abc&q=a%20b")))
@@ -42,10 +48,14 @@
 
 (deftest test-route-unknown-method
   (let [st (store/fake-store)
-        res (server/route st {:method :get
-                              :path "/xrpc/ai.etzhayyim.apps.drive.nope"})]
+        req {:method :get :path "/xrpc/ai.etzhayyim.apps.drive.nope"}
+        res (server/route st (assoc req :expected-api-key "secret" :x-api-key "secret"))]
     (is (= 404 (:status res)))
-    (is (str/includes? (get-in res [:json "error"]) "not found"))))
+    (is (str/includes? (get-in res [:json "error"]) "not found"))
+    (is (= 401 (:status (server/route st (assoc req :expected-api-key "secret"))))
+        "no supplied key")
+    (is (= 401 (:status (server/route st req)))
+        "no configured key")))
 
 (deftest test-explicit-kotoba-capability-and-config
   (let [request (atom nil)
