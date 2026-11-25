@@ -168,9 +168,9 @@ planned → sealing → uploading ─┬→ receipt-verified → readback-verifi
 | 段階 | 解禁条件 | 退避できる対象 | 参照 |
 |---|---|---|---|
 | **Stage 0（現行）** | WNFS の head が存在する間は拒否。現行の `op_evict` は流用しない | なし | `encrypted-sync.md` の bounded snapshot |
-| **Stage 1** | W1（bound の引き上げ）と W3（BLAKE3 の CAR index）の後 | `cache/` の**再取得可能な file content block** のみ。LRU | §4.5、§8 |
-| **Stage 2** | 検証役と lease の連携の後 | `packs/` の file content block。ただし右の条件をすべて満たすときだけ | `retention-design.md` §3.2、§4、§6、§8 |
-| **Stage 3** | Stage 2 の運用実績と、P6 の bounded batch の後 | 検証済み object の無人 LRU のみ。P6 の上限つき承認を前提 | §4.9、§8 |
+| **Stage 1** | **P0（測定）・W1・W2・W3・D1・D2 の後** | `cache/` の**再取得可能な file content block** のみ。LRU | §4.5、§8、[p0-measurement-plan.md](p0-measurement-plan.md) |
+| **Stage 2** | 検証役と lease の連携、**quota**、**12 MiB の transport 上限の引き上げ**の後 | `packs/` の file content block。ただし右の条件をすべて満たすときだけ | `retention-design.md` §3.2、§4、§6、§8 |
+| **Stage 3** | Stage 2 の運用実績、P6 の bounded batch、**quota**、**12 MiB の引き上げ**の後 | 検証済み object の無人 LRU のみ。P6 の上限つき承認を前提 | §4.9、§8 |
 
 Stage 2 の条件（1 つでも欠けたら退避しない）:
 
@@ -180,12 +180,15 @@ Stage 2 の条件（1 つでも欠けたら退避しない）:
   `observedAt` が未来過ぎる記録（読む側の時刻より 5 分を超えて先）も拒否する（同 §6）。
 - 退避する block がすべて lease の **inventory** に入っている（同 §4）。
 - 保持コピーの Object Lock を **version id** で確認する。名前で見ない（同じ名前に lock なしで書き直すと、名前の参照は
-  lock のない version を返す。同 §16 の S1-2a）。mode は `COMPLIANCE`、期限は lease の `retentionUntil` 以上。
+  lock のない version を返す。同 §16 の **S1-2b**。version を指した確認）。mode は `COMPLIANCE`、期限は lease の
+  `retentionUntil` 以上。
 - **`storeClass 3` を独立した障害ドメインに数えない**（同 §3、ADR 0041 D6 の改定）。R2 の「provider 1 以上」を
   `storeClass 3` で置き換えない。
 - **`retentionUntil=0` の受領証では解禁しない。** 期限のない受領証は保持の約束ではない。
 - Stage 3 では **G2（2 障害ドメイン）と R3（3 障害ドメイン）を区別する**。G2 は storage architecture の受入の単位で、
   R3 は保持の等級である。無人 LRU は「検証済み」の object に限り、P6 の bounded batch の承認が無い運転では行わない。
+  大規模な退避（1 回の grant の N / B を超える量）には、**退避専用の grant**（endpoint・N・B・期限・対象の operation 集合を
+  名指す）が要る。Stage 2 の手動の退避も、同じ grant の消費として数える（§4.9）。
 
 ADR 0041 D2 により、判定は検証役が行い、provider・入口・その鍵と分離する。client は判定をやり直さず、署名と期限を検証して使う。
 
@@ -207,15 +210,18 @@ ADR 0041 D2 により、判定は検証役が行い、provider・入口・その
 
 - 読むときは path を解決して（snapshot key）、必要な block の label を導き、その block だけを取得する。取った block は
   CID と AEAD で検証する。
-- namespace closure の node は常に local にある（退避しない）。したがって path の解決に network は要らない。要るのは
-  content block の取得だけである。
+- namespace closure の node は常に local にある（退避しない）。**closure の置き場は profile で固定する。Local-Meta は内蔵 meta**
+  （USB 不在でも一覧と path 解決ができる）、**Portable-USB は container 内**（`drive-host-ipc.md` §6.1）。`cache/` に置かない。
+  したがって path の解決に network は要らない。要るのは content block の取得だけである。
 - 全体の復元は、各 block を検証してから staging に書き、**すべて検証できてから**公開する。既存のファイルは上書きしない。
 
 #### 巻き戻し
 
-- **オンライン:** サーバは lease と commit の**単調な epoch** を持つ。client の commit が古い `base-epoch` を持つ場合、
-  サーバは**型付きで拒否する**。黙って rebase しない（`retention-design.md` §10 の冪等性、`drive-host-ipc.md` §9）。
-- **同一端末:** 端末側の high-water（`volume-lineage-id → 最大 epoch / session id`）で検出する。
+- **オンライン:** サーバは lease と commit の**単調な epoch** を持ち、client の commit が古い `base-epoch` を持つ場合に
+  **型付きで拒否する**設計である。**ただし、これはまだ実装されていない**（サーバの commit / `base-epoch` の設計は子 issue 15）。
+  **それまではオンラインの巻き戻し検出を主張しない。** host と `sync client` は黙って rebase しない。
+- **同一端末:** 端末側の high-water（`(volume-lineage-id, volume-instance-uuid) → writer epoch の最大値`）で検出する
+  （改訂案 §21.6）。**session id は単調でないので high-water に使わない。**
 - **オフライン・媒体全体の別端末への巻き戻しは検出できない。** これは仕様の限界であり、**UI の文言にも「検出できない」と
   書く**。検出できるかのような表示をしない。
 
@@ -223,17 +229,20 @@ ADR 0041 D2 により、判定は検証役が行い、provider・入口・その
 
 - 外部通信は既存の canonical broker だけを通す。native の HTTP 抜け道、app origin の API、redirect、silent fallback は作らない。
   操作ごとの同意で、endpoint・method/path・data category を示す。拒否すれば request は出さない。
-- **pack が多いと、操作ごとの同意が成り立たない**: 1 GiB を 32 MiB で送ると PUT と readback の GET で約 64 回。
+- **pack が多いと、操作ごとの同意が成り立たない**: 1 GiB を 12 MiB の transport 上限で送ると、86 Pack に分かれ、
+  PUT と readback の GET で約 172 回になる。
   **案 B（broker に bounded batch の操作を足し、「この endpoint へ最大 N 個・合計最大 B byte」を 1 回で承認する）は、
   owner 決定（2026-11-25、AWAI-4118 v1.0 のオーナー決定 2）で採用する（P6）。** shared runtime の変更が前提で、
   変更が入るまで製品側は B を使えない。案 A（pack を 256 MiB 級に上げて回数を減らす）は契約を変えずに併用するが、
   64 GiB には足りない。製品側で同意のロジックを複製・拡張しない。P6 が入るまで、無人の大量退避は主張しない。
-- **P6 の意味:** 承認 1 回が endpoint・最大要求数 N・最大合計 bytes B を名指す。拒否なら request は **0 件**。
-  承認ごとに append-only の監査 record を書く。grant には期限があり、期限が来たら未使用分は失効する（値の案は
-  5 分、hard cap 10 分。`bounded-batch-consent-proposal.md`）。N / B は**実際に送った要求**（再試行と readback を
-  含む）で消費する。使い切ったら追加の承認が要る。revoke できる。**製品は独自の同意を作らず、grant を超える再試行を
-  しない。** ローカルの USB I/O は同意の対象外（ネットワークを使わない）。実装は shared runtime が持ち、製品は消費する
-  だけである（既定値の案は [bounded-batch-consent-proposal.md](bounded-batch-consent-proposal.md)）。
+- **P6 の意味:** grant は endpoint に加えて、**method / path prefix（または operation 集合）**、**data category**、
+  **client / device の binding**、**grant id / nonce** を名指す。拒否なら request は **0 件**。broker は
+  **送信前に N / B を予約**し、失敗・再試行・readback を含む実際の消費で減らす。承認ごとに append-only の監査 record を
+  書き、**grant id を記録**する。grant には期限があり、期限が来たら未使用分は失効する（値の案は 5 分、hard cap 10 分。
+  `bounded-batch-consent-proposal.md`）。N / B を使い切ったら追加の承認が要る。**revoke は強制する**（revoke の後は
+  送らない）。**製品は独自の同意を作らず、grant を超える再試行をしない。** ローカルの USB I/O は同意の対象外
+  （ネットワークを使わない）。実装は shared runtime が持ち、製品は消費するだけである（既定値の案は
+  [bounded-batch-consent-proposal.md](bounded-batch-consent-proposal.md)）。
 - 現状の Yataverse の pack protocol は**認証なし**（上限内の opaque な pack を誰でも保存できる）。pack の上限を上げる前に、
   書き込みの認可と quota が要る。**WNFS はこの課題の答えを持っている**: 書き込み権限を RSA accumulator の batch proof で示し、
   サーバは平文を読まずに検証する（仕様 §4.2〜4.4）。ただし wnfs-cljc は proof を**未実装**。
@@ -292,8 +301,8 @@ ADR 0041 D2 により、判定は検証役が行い、provider・入口・その
 | **W4** | apex | 書き込み認可（membership / batch proof、writer 認可、fencing） | サーバが平文なしで検証、拒否 corpus |
 | **P7** | — | 共有・失効、独立 node の複製、recovery | 別の gate（この設計の範囲外） |
 
-退避の段階の順序: Stage 1 は D3 の後、Stage 2 は検証役と lease の連携の後、Stage 3 は Stage 2 の運用実績と P6 の後である。
-順序を飛ばさない（§4.8）。
+退避の段階の順序: **Stage 1 は D3 そのもの**（D3 の完了が Stage 1 の入口）。Stage 2 は検証役と lease の連携、quota、
+12 MiB の引き上げの後。Stage 3 は Stage 2 の運用実績と P6 の後である。順序を飛ばさない（§4.8）。
 
 ## 9. 失敗と攻撃の見方（要点）
 
@@ -314,6 +323,8 @@ ADR 0041 D2 により、判定は検証役が行い、provider・入口・その
 5. **変更される大きな file**（§4.4）: アプリ側の segment 規約を採るか、対象外にするか。
 6. **block の大きさ**: Awai の既存 raw frame（65531 byte）と WNFS の 262,104 byte の関係。WNFS 準拠のため後者を採るが、移行時の整合を確認する。
 7. pack / ページ / bound の具体的な値は、P0 の測定後に確定する。
+8. **オンラインの巻き戻し検出**（サーバ commit の単調 epoch と、古い `base-epoch` の commit の拒否）は**未実装**である
+   （子 issue 15）。それまでは検出を主張しない（§4.8）。
 
 ## 11. 初版（PR #248）からの変更
 

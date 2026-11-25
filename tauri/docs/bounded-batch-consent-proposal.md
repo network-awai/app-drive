@@ -1,10 +1,6 @@
 # Bounded batch consent — proposed defaults (design proposal, not implemented)
 
-Status: proposal. Bounded batch consent lives in the shared runtime
-broker (design §4.9, option B); adding it there is a shared-runtime change
-that needs an owner decision. Nothing here is implemented, and product
-code must not duplicate or extend consent logic locally. Until this (or an
-operational equivalent) lands, unattended mass evacuation is not claimed.
+Status: 採用は決定済み（2026-11-25、owner 決定 2）。**既定値 N / B / 期限は未定**で、この文書の数値は提案である（決定と既定値を混ぜない）。shared runtime の実装は未着手で、製品はまだ消費できない。
 
 ## Why
 

@@ -17,10 +17,12 @@
 **WNFS の write capability を container の鍵で包まない。** `awai-disk-format.md` D8 は「ディスク暗号化と E2EE を分ける」と定めており、この分離を保つ。理由:
 
 - container の鍵は「媒体を手にした者が bytes を読めるか」を決める。E2EE の capability は「どの端末が forest に書けるか」を決める。**守る対象も、失効の方法も違う。**
-- 包むと、container の復旧鍵（媒体に書く）が forest の書き込み権限を復元してしまう。v1.0 §2 の「container 復旧鍵では E2EE は復号不可」が成り立たなくなる。
+- 包むと、媒体の keyslot を開けた者が forest の書き込み権限まで得てしまう。v1.0 §2 の「container 復旧鍵では E2EE は復号不可」が成り立たなくなる。
 - 包むと、媒体の紛失で container 鍵をローテーションしたときに capability も失効したと誤解される（§6 のとおり失効しない）。
 
 **既定は USB に E2EE の秘密を置かない。** 媒体には container の keyslot だけを置き、forest の capability は端末の custody（`custody.cljc` の既存の包み）に残す。別端末へ渡すときだけ §3 / §4 の経路を使う。
+
+**媒体に置くのは、復旧鍵で開く wrapped keyslot のみ。生の 256 bit 復旧鍵は媒体外（別保管）に置く。** この区別を崩さない（§2.1・§2.5）。
 
 ## 2. container の keyslot
 
@@ -29,7 +31,7 @@
 | slot | 何で開くか | 必須か |
 |---|---|---|
 | passphrase | Argon2id で導いた鍵 | 任意（user が設定した場合） |
-| recovery key | 256 bit の復旧鍵 | **必須**（v1.0 §2） |
+| recovery key | 256 bit の復旧鍵（**媒体には置かず、媒体外で別保管**。媒体に置くのは、この鍵で開く wrapped keyslot だけ） | **必須**（v1.0 §2） |
 | Passkey | WebAuthn の credential | 任意（端末が対応する場合） |
 
 - slot の数と id は **未決定**。Kura の形式（v3）で固定する。
@@ -37,8 +39,9 @@
 
 ### 2.2 AAD
 
-- AAD は **canonical DAG-CBOR** の slot header とし、少なくとも次を束縛する: `v`（format 版）、`lineageId`、`slot`、`kdf`（`alg`、`m`、`t`、`p`、`salt`）、`wrap`（`alg`、nonce）。
-- **AAD の対象は slot header 全体から、その slot の wrapped key と tag を除いたもの**とする。これで KDF 引数・slot 番号・lineage を後から差し替えられない。
+- AAD は **canonical DAG-CBOR** の slot header とし、少なくとも次を束縛する: `format`（format 文字列）、`profile`（`portable-usb`）、`v`（format 版）、`volume-lineage-id`、`slot`、`kdf`（`alg`、`m`、`t`、`p`、`salt`）、`wrap`（`alg`、nonce）。**改訂案 §21.4 の keyslot の AAD と同じ分類子を使う**（raw の keyslot とは format 文字列も AAD も共有しない）。
+- **AAD の対象は slot header 全体から、その slot の wrapped key と tag を除いたもの**とする。これで KDF 引数・slot 番号・lineage・profile を後から差し替えられない。
+- **sidecar は untrusted hint である。** 全欄に MAC を付けるが（改訂案 §21.2）、値は container の認証済み領域と、アプリに埋め込んだ下限に照合する。sidecar の値だけで下降の可否を決めない。
 - 長さ・整数の表現・並びは **未決定**。3 OS で同じ bytes になる canonical 形式を 1 つに固定し、**golden corpus** で検証する（v1.0 §6）。corpus が無い間は「cross-OS で読める」と主張しない。
 
 ### 2.3 下降の拒否
@@ -55,8 +58,8 @@
 
 ### 2.5 OS Keychain の blob を媒体にコピーしない
 
-- 端末の Keychain / Keystore にある blob（unlock、canonical wrapped key record）を USB に複製しない。
-- 媒体に置いてよいのは container の keyslot と、MAC 付きの lease / epoch だけ。**端末の custody を媒体へ移したと主張しない。**
+- 端末の Keychain / Keystore にある blob（unlock、canonical wrapped key record）を、**暗号化 container 本体にも sidecar にも、平文でコピーしない。** sidecar は MAC 付きだが欄は平文であり、鍵素材の置き場所ではない。
+- 媒体に置いてよいのは、復旧鍵や passphrase で開く **wrapped keyslot** と、MAC 付きの lease / epoch だけ。**生の復旧鍵を置かず、端末の custody を媒体へ移したとも主張しない。**
 - これは `encrypted-sync.md` の「device custody」の境界を弱めないための規則である。
 
 ## 3. 可搬 custody (a): 受入端末の公開鍵への out-of-band ペアリング
@@ -66,25 +69,28 @@
 ### 3.1 前提
 
 - 受入端末に Drive が入っていて、初期化済みの identity と自分の秘密鍵を持っている。
-- 受入端末の公開鍵と keyId を、**帯域外の経路**で送り手に渡せる（QR か、画面の短い文字列か。具体は **未決定**）。
+- 受入端末の公開鍵と keyId を、**帯域外の経路**で送り手に渡せる。QR に載せてよいのは **one-time の公開鍵か短命の secret だけ**で、capability を載せない。
 - 両方の端末で user が操作している（片方だけの操作で完結しない）。
-- 受入端末は、**container を開く手段を別に持つ**（復旧鍵か passphrase）。capability だけでは media の bytes を復号できない。
+- 受入端末は、**container を開く手段を別に持つ**（復旧鍵か passphrase。生の復旧鍵は媒体外で別保管）。capability だけでは media の bytes を復号できない。
 
 ### 3.2 交換するもの
 
 | 方向 | 内容 |
 |---|---|
-| 受入 → 送り手 | 公開鍵、keyId、device instance id、nonce |
-| 送り手 → 受入 | nonce に束縛した capability の包み（受入端末の公開鍵で暗号化）、capability の id（値ではない）、送り手の device id、期限 |
+| 受入 → 送り手 | 公開鍵、keyId、device instance id、nonce、**nonce への署名（possession proof）** |
+| 送り手 → 受入 | nonce に束縛した capability の包み（受入端末の公開鍵で暗号化）、capability の id（値ではない）、送り手の device id、期限、pairingId |
 
 - capability の**値**は包みの中だけに存在し、画面・ログ・監査記録に出さない。
+- 包みの AAD は、`pairingId`、送り手の device id、受入端末の keyId と公開鍵の digest、nonce、期限、capability の id と版、`profile` を束縛する。**AAD に無い欄を後から足さない。**
 - 送り手は、包む前に受入端末の公開鍵の fingerprint を user に確認させる（**短い照合文字列**の方式は未決定）。
 
 ### 3.3 期限と単回
 
 - nonce は 1 回だけ使う。期限は短くする（**値は未決定**）。
-- 同じ nonce の再送、期限切れ、別の受入端末の鍵での開封は拒否する。
+- **nonce への署名を検証できない相手には包まない**（公開鍵の提示だけでは possession を証明しない）。
+- used nonce は、端末の **device-protected な領域**に期限まで保存する。同じ nonce の再送、期限切れ、別の受入端末の鍵での開封は拒否する。
 - 成功したら、送り手の側に「この capability をこの device に渡した」record を残す（**値は残さない**）。
+- 成功時に **copy か move か**を user に明示する。copy は送り手の capability を残す。move は送り手側で以後使わないことを記録するが、**送り手が既に持つコピーは消せない**。
 
 ### 3.4 監査の field
 
@@ -115,7 +121,7 @@
 
 - 監査 record とログに書くのは: `exportId`、実行者（host の clientId）、対象の capability の id、出力先の種類（removable / file）、時刻、結果。
 - **capability の値、秘密鍵、passphrase、復旧鍵を、ログ・監査 record・error message に書かない。** error は code と一般化した文言だけにする。
-- 画面にも値を出さない（QR に埋め込む場合も、表示は 1 回だけで、再表示しない。**方式は未決定**）。
+- QR に載せてよいのは **one-time の公開鍵か短命の secret だけ**で、capability を載せない。passphrase は QR と同じ経路で渡さず、別の経路にする。画面にも秘密値を再表示しない。
 
 ### 4.3 user に警告すること
 
@@ -127,8 +133,8 @@
 ### 4.4 輸送と保存の保護
 
 - パッケージは**必ず暗号化する**。方式は (i) 受入端末の公開鍵へ包む、(ii) user の passphrase から Argon2id で導いた鍵で包む、のいずれか（**既定は未決定**。外部暗号レビューで決める）。
-- 平文のパッケージを一時ファイルに書かない。書く必要がある場合は、書いた直後に消し、消えたことを確認する（**方式は未決定**）。
-- 出力先が**同じ container の中**、または**平文で共有される領域**なら拒否する。
+- **平文のパッケージを一時ファイルに書かない（原則禁止）。** 例外は、swap の無い `memfd` または `tmpfs` だけとする。`unlink` は「消去」ではない（bytes が媒体に残りうる）ので、消したと主張しない。
+- 出力先は **device UUID / mount 単位**で判定する。同じ container の中、同期 folder、network share（SMB / NFS）は拒否する。
 
 ### 4.5 拒否する状態
 
@@ -136,7 +142,7 @@
 |---|---|
 | owner の確認が無い / 2 回目の確認が無い | 拒否。何も出力しない |
 | 監査 record を書けない | 拒否 |
-| 出力先が同じ container の中、または平文の共有領域 | 拒否 |
+| 出力先が同じ container の中、同期 folder、network share、または device UUID を確認できない mount | 拒否 |
 | passphrase が空、または基準未満 | 拒否（基準は **未決定**） |
 | 出力中に失敗 | 途中のファイルを残さない。残ったら削除し、削除できなければ「失敗し、残っている」と報告する |
 | capability が既に失効している（root ローテーション後） | 拒否。古い capability を export しない |
@@ -149,12 +155,14 @@ v1.0 §4 の規則を、媒体の運用に写す。
 |---|---|---|
 | 同じ `volume-lineage-id` + 同じ `volume-instance-uuid` + 新しい epoch、かつ前の lease が期限切れか明示 release | **正当な移動** | 開ける（RW） |
 | 同じ lineage + **違う** instance | **正当な clone** | 開ける。別の volume として扱う |
-| 同じ lineage + 同じ instance + 競合する epoch（同時、または lease が生きている） | **fork** | **read-only で停止**。epoch を進めない |
-| `dd` で複製した同じ instance の 2 つ | 上の fork の規則に当たる | 片方だけが RW。**運用のヒントであって安全な経路ではない** |
+| 同じ lineage + 同じ instance + 競合する epoch（同時、または lease が生きている） | **fork** | **停止**（改訂案 §14。既定では読みも拒否。`inspect` だけ許す）。epoch を進めない |
+| `dd` で複製した同じ instance の 2 つ | 上の fork の規則に当たる | **停止**。片方を自動で選ばない。**運用のヒントであって安全な経路ではない** |
+
+**「停止」の語義（改訂案 §14）:** 書き込みと回復を拒否し、**読み出しも拒否する**。診断用の読み取り専用 open（`inspect`）だけが、明示の操作で許される。**`read-only`（grade C や旧アプリの media downgrade のように読みを許す状態）と混ぜない。** デバイス集合の不一致・WAL の鎖切れ・root slot が成立しない場合・fork は、すべて「停止」である。
 
 - **`dd` の写しを「バックアップ」として扱わない。** instance が同じなので、両方を開くと fork になる。fork の検出は「同じ lineage + 同じ instance + 競合 epoch」で行い、**自動で片方を選ばない**（v1.0 §4）。
 - clone は instance が違うので開ける。ただし clone した媒体を両方書き換えると、後で forest の merge が要る（`scalable-sync-design.md` §4.4 の merge は未実装）。**clone を「同期の代替」と呼ばない。**
-- 移動の正当性は lease の期限切れ / release で判定する。lease の MAC が合わない場合は「lease が無い」として read-only（§2.4）。
+- 移動の正当性は lease の期限切れ / release で判定する。lease の MAC が合わない場合は「lease が無い」として**停止**する（改訂案 K-1）。
 
 ## 6. 紛失と失効
 
@@ -163,18 +171,23 @@ v1.0 §4 の規則を、媒体の運用に写す。
 - container の鍵を替えても、WNFS の capability は別の木（§1）なので**有効なまま**である。
 - したがって、媒体を失ったときの失効は **forest root のローテーション + copy 移行**でしか行えない（v1.0 §2・§6）。
 - **capability が無い媒体は「復号不能」**である。container を開けても平文は読めない。**「読取専用」と書かない**（v1.0 §2）。
+- **「失効」の定義:** 新しい root が正本になり、旧 capability では**以後の書込みを復号できない**状態を指す。**過去に取得されたコピー（端末・媒体・第三者が既にダウンロードした bytes）は消せない。** 「失効 = すべてのコピーを回収した」ではない。
 
 ### 6.2 手順
 
 1. **新しい forest root を作る。** 現在の root から到達する directory node と forest HAMT node、および file content block を、新しい content key で再暗号化する（WNFS は内容が変わるたびに content key を作り直す。`scalable-sync-design.md` §4.4）。
 2. **再 seal した block を新しい Pack として送る。** 既存の CID は内容が変わるので再利用できない。
 3. **readback で全 Pack を検証する**（`scalable-sync-design.md` §4.7 の `committed` 条件）。
-4. **新しい root を control record に書く。** これで新しい capability が正本になる。
-5. **古い root を失効させる。** 古い lease を renew しない → 期限切れ / release。検証役の `policy-satisfied` を確認してから、古い root と古い block を配信から外す。
-6. **古い block を回収する。** lease の解放と、同じ CID を指す他の lease が無いことの確認後（`app-itonami-yataverse/docs/retention-design.md` §10 の解放条件）。**回収は別 gate。**
+4. **新しい root を control record に書く。** これで新しい capability が正本になる。**この時点で、旧 capability は以後の書込みに使えない（§6.1 の失効の定義）。**
+5. **旧 root を配信から外す。** 旧 lease を renew しない → 期限切れ / release。**新 root と新 Pack の lease** の検証役 `policy-satisfied`（R2 以上、`validUntil` 内）を確認する。**旧 root の `policy-satisfied` は失効の条件ではない。**
+6. **旧 block を回収する。** lease の解放と、同じ CID を指す他の lease が無いことの確認後（`app-itonami-yataverse/docs/retention-design.md` §10 の解放条件）。順序は「配信から外す → lease を release → 期限 / lock の制約を待つ → 削除」。**回収は別 gate。**
 
-- 1〜4 の間、古い capability は**まだ有効**である。したがって「失効した」と言えるのは 5 の後。**手順の途中で「失効済み」と表示しない。**
-- rollback: 4 の後でも、古い root の block が残っていれば古い root に戻せる。5 の後は戻せない（古い lease を切るため）。**5 の前に rollback の判断を確定する。**
+- 1〜3 の間、旧 capability は**まだ有効**である。**手順の途中で「失効済み」と表示しない。**
+- **旧 revision（`previous` / skip ratchet）の履歴は旧 root の下に残る。** 新 root は旧 root を参照しない。旧 root を配信から外し、旧 lease を release して初めて、旧 capability は新しい書込みに使えない。
+- **remote-only の block も対象**である。手元に無い block は取得して再 seal する（再暗号化の対象は closure 全体で、手元の有無に依らない）。
+- 残った端末は、新 capability を **OOB ペアリング（§3）で明示的に再ペアリング**する。再ペアリングしない端末を **device revocation list**（device id / capability id）に載せ、control record に保持する。**server 側の強制は W4（write proof）まで無い**ので、「一覧に載せた = サーバが拒否する」と主張しない。
+- rollback: 新旧の root が併存する間は旧 root に戻せる。5 の後は旧 root を配信から外しているので、戻すには配信を戻す操作が要る（**「戻せない」ではなく「別の操作が要る」**）。既に取得されたコピーは、どの段階でも回収できない。
+- **失効は検証役の可用性に依存しない。** 新 root への切替（4）は即時で、検証役が止まっていても行える。検証役が要るのは、新 root / 新 Pack の保持の確認と、旧 block の回収（R2 の範囲）である。
 
 ### 6.3 費用と所要時間（見積り）
 
@@ -182,7 +195,7 @@ v1.0 §4 の規則を、媒体の運用に写す。
 
 - 対象は v1.0 §5 の 64 GiB 級 profile。
 - block は WNFS の暗号文 block 262,144 B（`scalable-sync-design.md` §2）。
-- Pack は 32 MiB（§4.5 の目標値）。
+- **転送の Pack は 12 MiB**（Yataverse の transport 上限。`encrypted-sync.md`、改訂案 §18.3 #10）。ローカルの Pack 目標 32 MiB（`scalable-sync-design.md` §4.5）とは別で、再送の単位は transport の上限で決まる。
 - 1 Pack につき PUT 1 回 + readback GET 1 回。
 - 回線は上り下りとも同じ実効速度とし、再送・再開・CPU 時間を含めない。
 
@@ -190,26 +203,36 @@ v1.0 §4 の規則を、媒体の運用に写す。
 
 - 64 GiB = 64 × 1,073,741,824 = **68,719,476,736 B**
 - block 数 = 68,719,476,736 ÷ 262,144 = **262,144**
-- Pack 数 = 68,719,476,736 ÷ 33,554,432 = **2,048**
-- 転送量 = PUT + GET = **137,438,953,472 B**
+- Pack 数 = 68,719,476,736 ÷ 12,582,912 = 5,461.33 → **5,462**
+- 操作数 = PUT のみ **5,462**、PUT + readback GET **10,924**
+- 転送量（readback 込み） = **137,438,953,472 B**
 - 20 Mbit/s（2.5 MB/s）: 137,438,953,472 ÷ 2,500,000 ≈ 54,976 s ≈ **15.3 時間**
 - 100 Mbit/s（12.5 MB/s）: 137,438,953,472 ÷ 12,500,000 ≈ 10,995 s ≈ **3.1 時間**
+
+broker の承認回数（B の定義で変わる。数値は [bounded-batch-consent-proposal.md](bounded-batch-consent-proposal.md) の**提案値**で、出荷値ではない）:
+
+- **B = PUT の bytes のみ**、1 GiB の hard cap: 68,719,476,736 ÷ 1,073,741,824 = **64 grants**。これは **readback を数えない下限**。
+- **既定 48 MiB（PUT bytes）**: 68,719,476,736 ÷ 50,331,648 = 1,365.33 → **約 1,365 grants**。
+- **B = PUT + readback の合計**、1 GiB の hard cap: 137,438,953,472 ÷ 1,073,741,824 = **128 grants**。
+- 操作の上限 128 / grant: 10,924 ÷ 128 = 85.34 → **86 grants**。
+- 上の中で最も厳しいのは既定 48 MiB の **約 1,365 grants** である。
 
 含まないもの:
 
 - 262,144 block の再 seal（XChaCha20-Poly1305）と `NameAccumulator` の再計算。**未測定**（[p0-measurement-plan.md](p0-measurement-plan.md)）。
 - client 側の hash と検証。
 - 検証役の確認と lease の処理。
-- broker の承認回数: 4,096 操作を 1 承認 128 操作の上限で割ると 32 回、bytes で 64 GiB を 1 GiB の上限で割ると 64 回。**64 回が支配的**（[bounded-batch-consent-proposal.md](bounded-batch-consent-proposal.md) の提案値。出荷値ではない）。
+- 12 MiB の transport 上限を引き上げた場合の再計算（引き上げは認可の後。`scalable-sync-design.md` §4.9）。
 
 ### 6.4 gate
 
 - **owner の確認**（鍵操作）。
-- 検証役の `policy-satisfied` が **R2 以上**で、判断時点で `observedAt` / `validUntil` が有効（`app-itonami-yataverse/docs/retention-design.md` §6）。期限切れは「不明」として拒否。
+- **新 root / 新 Pack の lease** の `policy-satisfied` が **R2 以上**で、判断時点で `observedAt` / `validUntil` が有効（`app-itonami-yataverse/docs/retention-design.md` §6）。期限切れは「不明」として拒否。**失効の切替（新 root の正本化）自体は検証役に依存しない。**
 - すべての block が lease の inventory 内（同 §4）。
-- Object Lock を **version id** で確認し、`COMPLIANCE` で期限が lease の `retentionUntil` 以上（同 §8、§16 の S1-2a）。
+- Object Lock を **version id** で確認し、`COMPLIANCE` で期限が lease の `retentionUntil` 以上（同 §8、§16 の **S1-2b**）。
 - `retentionUntil=0` の受領証では回収しない（同 §5）。
 - readback の全数一致（`scalable-sync-design.md` §4.7）。
+- **device revocation list の更新**（残った端末の再ペアリングの記録、再ペアリングしない端末の id）。
 
 ## 7. copy-only の移行
 
@@ -223,7 +246,7 @@ v1.0 §4 の規則を、媒体の運用に写す。
 
 - **hardware-backed custody。** Passkey は user presence の確認で、secure element による鍵の保持を証明しない。Keystore の鍵が hardware-backed かは端末依存で、**未確認**。
 - **物理的な FBE / FileVault / LUKS。** 媒体の盗難に対する OS の暗号化は OS が持つ（`awai-disk-format.md` §9）。Awai は持たない。
-- **オフライン・媒体全体の巻き戻しの検出。** 検出できない（v1.0 §6）。同一端末は high-water（`volume-lineage-id → 最大 epoch / session id`）で検出するが、**別端末への全体巻き戻しは検出しない**。
+- **オフライン・媒体全体の巻き戻しの検出。** 検出できない（v1.0 §6）。同一端末は high-water（`(volume-lineage-id, volume-instance-uuid) → writer epoch の最大値`）で検出する。**session id は単調でないので high-water に使わない**（改訂案 §21.6）。**別端末への全体巻き戻しは検出しない。**
 - **外部暗号レビュー。** v1.0 §6 の順序（R0 固定 → 外部レビュー → R3 出口 → R2 形式凍結）の前段階であり、レビューは未発注・未課金（この task の範囲外）。
 - **Kura の形式（v3）の bytes。** この文書は形式を確定しない。AAD の canonical 形式と golden corpus は Kura の改訂と共通にする。
 - **性能。** §6.3 は見積りで、実測ではない。
@@ -240,3 +263,7 @@ v1.0 §4 の規則を、媒体の運用に写す。
 6. **export パッケージの暗号化の既定**（受入端末の公開鍵か passphrase か）と、passphrase の最低基準。
 7. **監査 record の保持期間と暗号化**（`drive-host-ipc.md` §6.3 と同じ置き場所）。
 8. **clone した媒体の merge**（`scalable-sync-design.md` §4.4 の merge は未実装）。clone を同期の代替にできるかは、この実装の後。
+9. **high-water の永続化の置き場**（端末のどこに置くか。改訂案 §21.6 は「未決定」としている）。
+10. **device revocation list の server 側の強制**。W4（write proof）まで無い。一覧は control record の記録で、サーバの拒否ではない。
+11. **12 MiB の transport 上限の引き上げ時期**（§6.3 の見積りは 12 MiB を前提にした）。引き上げは認可の後（`scalable-sync-design.md` §4.9）。
+12. **sidecar に置く欄**（label の写し、keyslot の外側の欄、最小 writer 版の候補。改訂案 §21.2 は未決定）。
