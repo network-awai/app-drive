@@ -16,3 +16,8 @@ for (const [file, pin] of Object.entries(expected)) {
     throw new Error(`Platform dependency digest mismatch: ${file}`);
   }
 }
+
+const accountVerifier = await readFile(new URL('../src/wnfs-account.js', import.meta.url));
+if (createHash('sha256').update(accountVerifier).digest('hex') !== pins.wnfsAccount.sha256) {
+  throw Error('Awai OS account verifier pin drift');
+}

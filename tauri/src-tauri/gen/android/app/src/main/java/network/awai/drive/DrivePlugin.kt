@@ -25,8 +25,18 @@ class DrivePlugin(private val owner:Activity):Plugin(owner){
  private val local by lazy{DriveFiles(File(owner.filesDir,"drive-local-v1"))}
  private fun sync(parent:String){val dir=local.resolve(parent);require(dir.isDirectory);val fd=android.system.Os.open(dir.path,android.system.OsConstants.O_RDONLY,0);try{android.system.Os.fsync(fd)}finally{android.system.Os.close(fd)}}
  private fun args(i:Invoke):JSONObject{val raw=i.getArgs().getString("payload");require(raw.toByteArray().size<=131072);return JSONObject(raw)}
- private fun code(e:Exception):String{android.util.Log.w("AwaiDrive",e.javaClass.simpleName+":"+e.stackTrace.take(10).joinToString(";"){it.className+"."+it.methodName+":"+it.lineNumber});if(e is FileAlreadyExistsException)return "file-exists";return e.message?.takeIf{it in setOf("invalid-name","invalid-path","storage-full","file-too-large","entry-limit","file-busy","source-size-changed","local-provider-required","unsynced-data","recovery-required","restore-mismatch","sync-size-limit","account-mismatch","account-device-key-missing","invalid-account-link")}?:"drive-operation-failed"}
- @Command fun execute(i:Invoke){try{val q=args(i);val op=q.getString("op");if(op.startsWith("account")||op.startsWith("vault")){worker.execute{try{val response=if(op.startsWith("account")) account.execute(q) else vault.execute(q);i.resolve(JSObject(response.toString()))}catch(e:Exception){i.reject(code(e))}};return};when(op){
+ private fun code(e:Exception):String{android.util.Log.w("AwaiDrive",e.javaClass.simpleName+":"+e.stackTrace.take(10).joinToString(";"){it.className+"."+it.methodName+":"+it.lineNumber});if(e is FileAlreadyExistsException)return "file-exists";return e.message?.takeIf{it in setOf("invalid-name","invalid-path","storage-full","file-too-large","entry-limit","file-busy","source-size-changed","local-provider-required","unsynced-data","recovery-required","restore-mismatch","sync-size-limit","account-mismatch","account-device-key-missing","invalid-account-link","account-broker-unavailable","account-approval-denied","account-vault-mismatch")}?:"drive-operation-failed"}
+ @Command fun execute(i:Invoke){try{val q=args(i);val op=q.getString("op");if((op.startsWith("account")&&op!="accountProof")||op.startsWith("vault")){worker.execute{try{val response=if(op.startsWith("account")) account.execute(q) else vault.execute(q);i.resolve(JSObject(response.toString()))}catch(e:Exception){i.reject(code(e))}};return};when(op){
+  "accountProof"->{
+   val host="network.awai.home"
+   if(owner.packageManager.checkSignatures(host,owner.packageName)!=android.content.pm.PackageManager.SIGNATURE_MATCH)
+    throw java.io.IOException("account-broker-unavailable")
+   val intent=Intent("network.awai.home.WNFS_ACCOUNT_PROOF").setClassName(host,"network.awai.home.AccountBrokerActivity")
+    .putExtra("purpose",q.getString("purpose")).putExtra("value",q.getString("value"))
+   if(q.has("recipient"))intent.putExtra("recipient",q.getString("recipient"))
+   if(intent.resolveActivity(owner.packageManager)==null)throw java.io.IOException("account-broker-unavailable")
+   startActivityForResult(i,intent,"accountApproved")
+  }
   "pick"->{local.resolve(q.getString("parent"));val intent=Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");startActivityForResult(i,intent,"picked")}
   "open"->{val f=local.resolve(q.getString("path"));require(f.isFile);val uri=FileProvider.getUriForFile(owner,"network.awai.drive.fileprovider",f);val intent=Intent(Intent.ACTION_VIEW).setDataAndType(uri,DriveDocuments.mime(f)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);owner.startActivity(Intent.createChooser(intent,"ファイルを開く"));i.resolve()}
   "list","mkdir","createText"->worker.execute{try{val parent=q.getString("parent");when(q.getString("op")){
@@ -36,6 +46,11 @@ class DrivePlugin(private val owner:Activity):Plugin(owner){
   }}catch(e:Exception){i.reject(code(e))}}
   else->i.reject("unsupported-operation")
  }}catch(e:Exception){i.reject(code(e))}}
+ @ActivityCallback fun accountApproved(i:Invoke,result:ActivityResult){
+  val raw=result.data?.getStringExtra("accountProof")
+  if(result.resultCode!=Activity.RESULT_OK||raw==null||raw.length>16384){i.reject("account-approval-denied");return}
+  try{i.resolve(JSObject().put("proof",JSONObject(raw)))}catch(e:Exception){i.reject("account-approval-denied")}
+ }
  @ActivityCallback fun picked(i:Invoke,result:ActivityResult){if(result.resultCode!=Activity.RESULT_OK){i.reject("import-cancelled");return};val uri=result.data?.data;if(uri==null){i.reject("import-cancelled");return}
  worker.execute{try{
   // Network providers are not silently adopted as external storage operations.
