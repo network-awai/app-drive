@@ -11,7 +11,7 @@ build-pinned HTTPS storage endpoint, it can encrypt using the existing Kotoba
 hybrid envelope, sync an AwaiFS owner-store/CAR snapshot, retain files offline,
 and restore an emptied cache using device-protected keys and a trusted root.
 
-**Legacy encrypted snapshots admit 8 MiB total and 1,000 entries.** Ordinary local
+**Legacy encrypted snapshots (legacy profile only) admit 8 MiB total and 1,000 entries.** Ordinary local
 import admits 1 GiB, but larger files stay unsynced and cannot be evicted. This
 is a bounded snapshot adapter, not WNFS private-tree or streamed large-file sync.
 It creates a device-local recipient, not an Awai account/Passkey enrollment.
@@ -29,13 +29,16 @@ outside Git. Each
 pack stays within the existing 12 MiB transport cap. This browser profile
 admits 32 MiB of plaintext and 1,000 forest rows per snapshot — files plus
 every directory, including parent directories synthesized when sealing, so
-seal refuses anything open would refuse. Its worker holds
+seal refuses anything open would refuse. A snapshot above 12 MiB is split
+into multiple packs within that cap. Its worker holds
 bounded arrays while the streaming large-snapshot path is developed.
 
-A WNFS endpoint must admit and verify both BLAKE3 WNFS blocks and SHA-256
-owner-capsule blocks. The existing Yataverse Drive endpoint's CID validator
-only admits SHA-256, so keep the default legacy profile with that service
-until its WNFS admission has been qualified. WNFS restore creates a verified
+A WNFS endpoint must admit and verify both BLAKE3 WNFS blocks (legacy forests,
+read path only) and SHA-256 owner-capsule blocks. New saves use the SHA-256
+storage profile (see [wnfs-sha256-sync.md](docs/wnfs-sha256-sync.md)), so the
+Yataverse Drive endpoint's SHA-256-only CID validator admits new saves as-is;
+native BLAKE3 admission is not needed for new writes. The legacy snapshot
+profile stays available unchanged. WNFS restore creates a verified
 copy in a new folder. Local eviction is disabled in this profile because
 immediate remote readback does not prove durable retention.
 
