@@ -190,9 +190,22 @@ impl Local {
 mod tests {
     use super::*;
     fn temp() -> Local {
-        let d = std::env::temp_dir().join(format!("awai-drive-test-{}-{}", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        // Unique per test even when tests run in parallel in one process:
+        // pid + nanos alone can collide for threads that start together,
+        // which flakes tests whose assertions depend on an empty root.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let d = std::env::temp_dir().join(format!("awai-drive-test-{}-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)));
         Local::new(d).unwrap()
+    }
+
+    #[test]
+    fn temp_dirs_are_unique() {
+        let a = temp();
+        let b = temp();
+        assert_ne!(a.root, b.root);
     }
 
     #[test]
