@@ -18,6 +18,11 @@ It creates a device-local recipient, not an Awai account/Passkey enrollment.
 Uninstalling/clearing app data or losing device keys can make remote snapshots
 unreadable. Keep original data; independent owner recovery is not implemented.
 See [encryption, custody and transport boundaries](docs/encrypted-sync.md).
+
+AWAI-4118's design set (design only, not implemented): [Drive host IPC](docs/drive-host-ipc.md),
+[Portable-USB custody](docs/portable-usb-custody.md), [P0 measurement plan](docs/p0-measurement-plan.md),
+[child-issue proposal](docs/awai-4118-child-issues.md).
+
 The [WNFS migration](docs/scalable-sync-design.md) adds a copy-only Android
 profile with a WNFS PrivateForest and multiple CARv1 packs. It preserves the
 legacy snapshot head and owner key. Enable it for a validated HTTPS storage

@@ -143,32 +143,97 @@ planned → sealing → uploading ─┬→ receipt-verified → readback-verifi
 - readback は pack 全体の GET と SHA-256 の一致。受領証（AWAI-3314、ビルドが公開鍵集合を固定しているとき必須）は検証するが、
   **retention や独立複製の証拠ではない**。sampled readback で退避を許す案は採らない。
 
-### 4.8 退避と hydration（file 単位）
+### 4.8 退避と hydration（block 単位・namespace closure）
+
+**namespace closure は固定である。** 現在の root から到達する WNFS の directory node と forest の HAMT node は、
+すべて保護域に属し、退避しない。退避できるのは **file content block だけ**である。directory の entry は 1 つの node（1 block）に
+収まる（§4.3）ので、directory node を退避すると path の解決そのものができなくなる。forest の node を退避すると label の探索が
+できなくなる。
+
+- 「退避するのは平文の file」という以前の書き方を捨てる。退避の単位は file ではなく block で、保護の単位は tree の node である。
+- `packs/` の一部の block だけを退避することはできない（Pack は不変で、indexless CARv2 の 1 ファイル）。部分退避が要る場合は
+  **repack / compaction** を行う:
+  1. 生きている block から新しい Pack を作る（§4.5 の形式）。
+  2. 全 block の CID と Pack 全体の checksum を検証する。
+  3. catalog と root を新しい Pack を指すように更新する（WAL の `seal-pack`、`awai-disk-format.md` §5）。
+  4. 古い Pack を参照する root が両方の slot から消えた後でだけ、古い Pack を回収する。
+- 退避の前に、local の size / mtime / 内容を再確認し、新規・変更・中断中のものがあれば拒否する。
+  **同期していないデータは決して消さない。削除と退避を区別する。** water mark と空き reserve は設定値で、SLO にしない（AWAI-2856）。
+
+#### 解禁の段階
+
+`app-itonami-yataverse/docs/retention-design.md` の等級と、ADR 0041 D2（検証役は provider・入口と別の主体・別の process・
+別の鍵で動かす）に合わせる。段階は飛ばさない。
+
+| 段階 | 解禁条件 | 退避できる対象 | 参照 |
+|---|---|---|---|
+| **Stage 0（現行）** | WNFS の head が存在する間は拒否。現行の `op_evict` は流用しない | なし | `encrypted-sync.md` の bounded snapshot |
+| **Stage 1** | W1（bound の引き上げ）と W3（BLAKE3 の CAR index）の後 | `cache/` の**再取得可能な file content block** のみ。LRU | §4.5、§8 |
+| **Stage 2** | 検証役と lease の連携の後 | `packs/` の file content block。ただし右の条件をすべて満たすときだけ | `retention-design.md` §3.2、§4、§6、§8 |
+| **Stage 3** | Stage 2 の運用実績と、P6 の bounded batch の後 | 検証済み object の無人 LRU のみ。P6 の上限つき承認を前提 | §4.9、§8 |
+
+Stage 2 の条件（1 つでも欠けたら退避しない）:
+
+- 検証役の `policy-satisfied` が **R2 以上**である（R2 = `operator-archive` 1 と `provider-node` 1 以上。R3 = 独立した
+  障害ドメインの `provider-node` 3 以上。`retention-design.md` §3.2）。
+- その記録が**判断時点で有効**である。`observedAt` / `validUntil` を基準にし、`validUntil` を過ぎた記録は「不明」として拒否する。
+  `observedAt` が未来過ぎる記録（読む側の時刻より 5 分を超えて先）も拒否する（同 §6）。
+- 退避する block がすべて lease の **inventory** に入っている（同 §4）。
+- 保持コピーの Object Lock を **version id** で確認する。名前で見ない（同じ名前に lock なしで書き直すと、名前の参照は
+  lock のない version を返す。同 §16 の S1-2a）。mode は `COMPLIANCE`、期限は lease の `retentionUntil` 以上。
+- **`storeClass 3` を独立した障害ドメインに数えない**（同 §3、ADR 0041 D6 の改定）。R2 の「provider 1 以上」を
+  `storeClass 3` で置き換えない。
+- **`retentionUntil=0` の受領証では解禁しない。** 期限のない受領証は保持の約束ではない。
+- Stage 3 では **G2（2 障害ドメイン）と R3（3 障害ドメイン）を区別する**。G2 は storage architecture の受入の単位で、
+  R3 は保持の等級である。無人 LRU は「検証済み」の object に限り、P6 の bounded batch の承認が無い運転では行わない。
+
+ADR 0041 D2 により、判定は検証役が行い、provider・入口・その鍵と分離する。client は判定をやり直さず、署名と期限を検証して使う。
+
+#### 保護する状態
 
 | 状態 | 意味 | 退避 |
 |---|---|---|
 | `local-only` / `dirty` / `syncing` | 未同期・変更あり・同期中 | 不可 |
-| `clean` | 全 block が readback-verified で、local の内容も一致 | 復旧可能性の条件を満たす場合のみ可 |
+| `clean` | 全 block が readback-verified で、local の内容も一致 | Stage 1〜3 の条件を満たす場合のみ可 |
 | `pinned` / `open` | 利用者が禁止 / 開いている | 不可 |
 | `remote-only` / `fetching` | 平文が local にない / 取得中 | — |
 | `error` | 検証失敗・欠損 | 不可（人が見る） |
 
-- 即時 readback だけでは退避できない。`retentionUntil=0` の受領証では保持期間を保証できないため、利用者の復旧に必要な期間の保持、または独立した復旧コピーを検証するまで端末内コピーを保持する。
-- 退避するのは**平文の file**。forest の root と block の label は残るので、読むときは path を解決して（snapshot key）、
-  必要な block の label を導き、その block だけを取得する。取った block は CID と AEAD で検証する。
-- 退避の前に、local の size / mtime / 内容を再確認し、新規・変更・中断中のものがあれば拒否する。
-  **同期していないデータは決して消さない。削除と退避を区別する。** water mark と空き reserve は設定値で、SLO にしない（AWAI-2856）。
+- pin は client ごとに所有する。**client A の pin を client B は evict できない**（`drive-host-ipc.md` §6.3）。同じ block を
+  複数の client が pin してよい。すべての pin が外れるまで退避しない。
+- `clean` は「退避してよい」ではない。段階と、上の条件の両方が要る。
+
+#### hydration
+
+- 読むときは path を解決して（snapshot key）、必要な block の label を導き、その block だけを取得する。取った block は
+  CID と AEAD で検証する。
+- namespace closure の node は常に local にある（退避しない）。したがって path の解決に network は要らない。要るのは
+  content block の取得だけである。
 - 全体の復元は、各 block を検証してから staging に書き、**すべて検証できてから**公開する。既存のファイルは上書きしない。
+
+#### 巻き戻し
+
+- **オンライン:** サーバは lease と commit の**単調な epoch** を持つ。client の commit が古い `base-epoch` を持つ場合、
+  サーバは**型付きで拒否する**。黙って rebase しない（`retention-design.md` §10 の冪等性、`drive-host-ipc.md` §9）。
+- **同一端末:** 端末側の high-water（`volume-lineage-id → 最大 epoch / session id`）で検出する。
+- **オフライン・媒体全体の別端末への巻き戻しは検出できない。** これは仕様の限界であり、**UI の文言にも「検出できない」と
+  書く**。検出できるかのような表示をしない。
 
 ### 4.9 外部通信、同意、サーバの認可
 
 - 外部通信は既存の canonical broker だけを通す。native の HTTP 抜け道、app origin の API、redirect、silent fallback は作らない。
   操作ごとの同意で、endpoint・method/path・data category を示す。拒否すれば request は出さない。
 - **pack が多いと、操作ごとの同意が成り立たない**: 1 GiB を 32 MiB で送ると PUT と readback の GET で約 64 回。
-  案 A（pack を 256 MiB 級に上げて回数を減らす。契約は変えない。64 GiB には足りない）と、
-  案 B（broker に **bounded batch** の操作を足し、「この endpoint へ最大 N 個・合計最大 B byte」を 1 回で承認する。
-  shared runtime の変更で、owner 決定が必要）。**P1〜P4 は A で進め、B は別 issue（P6）に切り出す。**
-  製品側で同意のロジックを複製・拡張しない。B が実現するまで、無人の大量退避は主張しない。
+  **案 B（broker に bounded batch の操作を足し、「この endpoint へ最大 N 個・合計最大 B byte」を 1 回で承認する）は、
+  owner 決定（2026-11-25、AWAI-4118 v1.0 のオーナー決定 2）で採用する（P6）。** shared runtime の変更が前提で、
+  変更が入るまで製品側は B を使えない。案 A（pack を 256 MiB 級に上げて回数を減らす）は契約を変えずに併用するが、
+  64 GiB には足りない。製品側で同意のロジックを複製・拡張しない。P6 が入るまで、無人の大量退避は主張しない。
+- **P6 の意味:** 承認 1 回が endpoint・最大要求数 N・最大合計 bytes B を名指す。拒否なら request は **0 件**。
+  承認ごとに append-only の監査 record を書く。grant には期限があり、期限が来たら未使用分は失効する（値の案は
+  5 分、hard cap 10 分。`bounded-batch-consent-proposal.md`）。N / B は**実際に送った要求**（再試行と readback を
+  含む）で消費する。使い切ったら追加の承認が要る。revoke できる。**製品は独自の同意を作らず、grant を超える再試行を
+  しない。** ローカルの USB I/O は同意の対象外（ネットワークを使わない）。実装は shared runtime が持ち、製品は消費する
+  だけである（既定値の案は [bounded-batch-consent-proposal.md](bounded-batch-consent-proposal.md)）。
 - 現状の Yataverse の pack protocol は**認証なし**（上限内の opaque な pack を誰でも保存できる）。pack の上限を上げる前に、
   書き込みの認可と quota が要る。**WNFS はこの課題の答えを持っている**: 書き込み権限を RSA accumulator の batch proof で示し、
   サーバは平文を読まずに検証する（仕様 §4.2〜4.4）。ただし wnfs-cljc は proof を**未実装**。
@@ -219,11 +284,16 @@ planned → sealing → uploading ─┬→ receipt-verified → readback-verifi
 | **W3** | apex | BLAKE3 対応の CAR index（range 取得） | block 単独の取得、不正な range の拒否 |
 | **D1** | app-drive | Drive の同期形式を wnfs-cljc に載せ替え（v1 は読み取り専用で残す。copy-only 移行） | v1 の復元が変わらない、v2 の往復一致、負の対照 |
 | **D2** | app-drive | 再開できる upload と commit（§4.7）、計画の表示 | 通信断・電源断・app 終了からの再開、部分 root が公開されない |
-| **D3** | app-drive | file 単位の退避と block 単位の hydration（§4.8） | 空 cache からの復元の一致、dirty/pinned/open の保護 |
+| **D3（Stage 1）** | app-drive | block 単位の退避と hydration、namespace closure、repack / compaction（§4.8） | `cache/` の file content block だけが消え、directory node と forest node は残る。repack 後の CID が一致する。部分退避を拒否する |
+| **Stage 2** | app-drive + shared | 検証役と lease の連携による `packs/` の退避（§4.8） | R2 以上の `policy-satisfied` の `validUntil` 内だけを解禁する。期限切れ・`retentionUntil=0`・inventory 外・Object Lock の不一致・`storeClass 3` だけの R2 を拒否する負の対照 |
+| **Stage 3** | app-drive + shared | 検証済み object の無人 LRU（G2 と R3 を区別、P6 の承認前提。§4.8） | G2 と R3 の条件を混ぜない。承認の無い運転で退避しない。承認の失効・消費で止まる |
 | **D4** | app-drive | macOS: 選択 folder の取り込み → File Provider | Mac の実機。元データを変更しない |
-| **P6** | shared | broker の bounded batch の同意（§4.9 案 B） | shared runtime の変更。**owner 決定が必要** |
+| **P6** | shared | broker の bounded batch の同意（§4.9 案 B）。**owner 決定済み（2026-11-25）** | shared runtime の変更。製品は消費のみ。grant の期限・N / B の消費（再試行と readback を含む）・revoke を試験する |
 | **W4** | apex | 書き込み認可（membership / batch proof、writer 認可、fencing） | サーバが平文なしで検証、拒否 corpus |
 | **P7** | — | 共有・失効、独立 node の複製、recovery | 別の gate（この設計の範囲外） |
+
+退避の段階の順序: Stage 1 は D3 の後、Stage 2 は検証役と lease の連携の後、Stage 3 は Stage 2 の運用実績と P6 の後である。
+順序を飛ばさない（§4.8）。
 
 ## 9. 失敗と攻撃の見方（要点）
 
@@ -236,7 +306,8 @@ planned → sealing → uploading ─┬→ receipt-verified → readback-verifi
 
 ## 10. 未決定（owner 決定・調査が必要）
 
-1. **bounded batch の同意**（§4.9 案 B）を shared runtime に足すか。足さないなら、無人の大量退避は成立しない。
+1. **bounded batch の同意**（§4.9 案 B）: owner 決定（2026-11-25）で採用。**未決定なのは shared runtime の実装と、
+   既定の N / B・grant の期限・hard cap の値**である。実装が入るまで、無人の大量退避は成立しない。
 2. **書き込みの認可**: wnfs-cljc の proof の実装（W4）まで、認証なしの現状のまま pack の上限を上げない。暫定の予約・quota をどうするか。
 3. **recovery key**: GB 級を退避する前提として、導線か明示的な承諾を必須にするか。
 4. **大きな directory**（§4.3）: archive 化を既定にするか、Awai 拡張の sharding を認めるか。

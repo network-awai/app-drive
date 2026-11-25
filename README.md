@@ -2,6 +2,7 @@
 
 - [Android and macOS Tauri app](tauri/README.md)
 - [WNFS sync design](tauri/docs/scalable-sync-design.md)
+- [Drive host IPC design (AWAI-4118)](tauri/docs/drive-host-ipc.md)
 - [Compatibility service and appview](AGENTS.md)
 
 The Tauri source moved from Awai OS PR #250's merge revision
