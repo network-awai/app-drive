@@ -89,7 +89,9 @@ client A の pin を client B が evict できず、拒否が監査 record に�
 繋がないこと。**未登録・古い・署名不一致の closure で `put` / `get` / `evict` / `pin` が拒否され、退避と membership 外の読みが
 止まること。** **新規 content CID の `put` が `set-closure` の事前登録なしで成立し、membership に追加されること。
 別 client が所有する CID の claim が `closure-conflict` で拒否されること。Portable の別端末移動後、container の signed
-manifest から membership が復元されること。** **負の対照: false CID（`cid-mismatch`）・short read・oversize block（`too-large`）を
+manifest から membership が復元されること。** **Portable では、`put` 後の signed manifest 更新が完了するまで `manifest-stale` を返し、
+safe-eject と移動を完了しないこと。owner 公開鍵の pin が無い manifest を拒否すること（manifest 内の鍵一覧を信頼根拠にしない）。**
+**負の対照: false CID（`cid-mismatch`）・short read・oversize block（`too-large`）を
 2 と共有して確認する。**
 
 **依存:** 2。
@@ -134,8 +136,10 @@ lease / epoch（`portable-usb-custody.md` §2）。**生の復旧鍵は媒体に
 
 **受入の証拠:** 3 OS で同じ golden corpus の AAD が一致すること。弱い KDF 引数と `minWriterVersion` の下降を拒否すること。
 lease の MAC の不一致で書き込みが止まること。**鍵の生成・ローテーションはこの issue では行わない。**
+**signed manifest の署名対象に `membershipDigest` / `mode` / `chunkCount` が入り、closure と membership の両方を覆うこと。
+owner 公開鍵 / root trust anchor で検証し、別端末移動後に membership を復元できること。**
 
-**依存:** `awai-disk-format.md`（main、#381 マージ済み）。**7 には依存しない**（custody の export が無くても container は実装できる）。
+**依存:** `awai-disk-format.md`（main、#381・#382）。**7 には依存しない**（custody の export が無くても container は実装できる）。
 
 **gate まで主張しないこと:** 「Portable-USB が使える」。**外部暗号レビュー**（`awai-disk-format.md` §17.2）と、main の形式の後。
 レビューの発注・課金は owner の確認。

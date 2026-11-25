@@ -81,6 +81,33 @@
 - 同期 Passkey を使う場合も、**復旧鍵を必須**にし、Passkey だけに依存しない。
 - 端末の紛失時に同期 Passkey を失効させる経路（アカウント側の操作）を、**この文書は保証しない**。
 
+### 2.8 signed manifest（membership の署名・更新・信頼基点）
+
+Portable-USB の container 内に置く **signed manifest** は、**closure と membership 一覧の両方**を署名で覆う。片方だけを覆う形にしない。
+
+- **署名対象**は `v`、`namespaceId`、`rootCid`、`epoch`、`mode`、`chunkCount`、`digest`、`membershipDigest` の全フィールド（`drive-host-ipc.md` §4.7 と同じ）。
+- `digest` と `membershipDigest` の canonical bytes は、それぞれの binary CID（36 B）を昇順・重複なしに並べた canonical DAG-CBOR の sha256。**同じ作り方**である。
+- `mode` と `chunkCount` を署名対象に入れるのは、chunked の取り違え・切り詰めを署名で防ぐためである。
+
+**`put` 後の更新経路:**
+
+1. `put` が更新後の `membershipDigest` を**暫定**として返す（署名コミット前）。
+2. client が**同じ closure** で `set-closure` を呼び、新しい `membershipDigest` に署名する。
+3. host が container 内の signed manifest を**原子的に**更新する（途中状態を公開しない）。
+4. `set-closure` の応答は `epoch` と、**署名で確定した** `membershipDigest`。**`put` の暫定値と同じ意味の値として扱わない。**
+
+**最新でない manifest:**
+
+- signed manifest が最新になるまで、**Portable の移動 / safe-eject を完了扱いにしない**。
+- 未更新のときは **`manifest-stale`** を返し、client に署名コミットを促す。safe-eject は manifest が最新でなければ完了を返さない。
+
+**信頼基点（自己参照を断つ）:**
+
+- **manifest 内の鍵一覧だけを信頼の根拠にしない。** **owner の公開鍵（または root trust anchor）を、container の認証済み header / keyslot、または OOB ペアリング時の pin に固定**する。
+- 許可 client 鍵の登録・rotate・失効は、**owner 署名付きの鍵一覧更新**として検証する。manifest の鍵一覧は owner 署名で認証された写しであり、**単独では信頼根拠にならない**。
+- pin をどの時点で取るか（作成時 / ペアリング時 / 更新時）は **未決定**。**pin が無い場合は拒否する**（自己署名の manifest を受け入れない）。
+- 別端末へ移したとき、新しい host は固定した owner 公開鍵で manifest を検証し、membership を再構成する。**検証できない場合は `stopped`（`version-unsupported` / 署名不正）で、所有集合を使わない。**
+
 ## 3. 可搬 custody (a): 受入端末の公開鍵への out-of-band ペアリング
 
 受入端末の公開鍵へ capability を包んで渡す経路。**container の鍵とは別**である。

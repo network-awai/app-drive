@@ -250,8 +250,8 @@ Response {
 - `put` は **`size <= 262,144`（256 KiB、WNFS block 上限）**を強制し、申告 `size` と実 bytes の一致も強制する。超過は **`too-large`**（quota の `no-space` と混ぜない）。
 - `put` の応答は `epoch` と `membershipDigest`（更新後）を返す。host は CID の検証と membership の追加を、ack の前に確定する。
 - **`dataHandle` は regular file、または pipe / socketpair**を許可する。fd は `fstat` で **`S_ISREG` / `S_ISFIFO` / `S_ISSOCK`** を許可し、**directory / block device / char device / symlink を拒否**する。**`O_NOFOLLOW` は path から open する場合の条件**で、fd を受ける経路では条件にしない（fd の種類検査と分離する）。Windows の `data-open` は **pipe frame の id** であり、file ではない。
-- `get` は fd / stream を渡す**前に** block の CID を検証し、不一致なら返さない（`awai-disk-format.md` §7.3 の scrub と同じ規則）。返すのは **membership または closure set の CID** だけである。
-- namespace の認可は、`clientId` に結び付いた **namespace capability**（§6.1。将来は W4 の write proof）で行う。capability を検証したら、CID が **membership** に無ければ追加する（closure set への事前登録は不要）。別 client が所有する CID は **`closure-conflict`**。path や CID の自己申告だけでは認可しない。
+- `get` は fd / stream を渡す**前に** block の CID を検証し、不一致なら返さない（`awai-disk-format.md` §7.3 の scrub と同じ規則）。返すのは **自分の membership または自分の closure set の CID** だけである。
+- namespace の認可は、`clientId` に結び付いた **namespace capability**（§6.1。将来は W4 の write proof）で行う。capability を検証したら、CID が **membership** に無ければ追加する（closure set への事前登録は不要）。**対象 CID が自分または他 client の closure set に属する場合は拒否する**（`closure-conflict`、role 不一致）。別 client が所有する CID も **`closure-conflict`**。path や CID の自己申告だけでは認可しない。
 - **inline の base64 を作らない。** 現行の 65531 byte × base64 の経路（`encrypted-sync.md`、`scalable-sync-design.md` §4.6）はこの契約の外にある。
 
 ### 4.4 backpressure・timeout・cancellation・順序
@@ -276,6 +276,7 @@ Response {
 | `closure-digest-mismatch` | `digest` が closure / membership と一致しない | 再試行しない |
 | `closure-conflict` | 別 client が所有する CID を含む | 再試行しない。共有は v1 の対象外 |
 | `closure-too-large` | admission bound（CID 数 / bytes）の超過 | 要求を分割する（`chunked` でも上限を超える場合は不可） |
+| `manifest-stale` | Portable の signed manifest が最新でない（membership の署名コミット前、または更新の失敗） | `set-closure` で署名コミットする。safe-eject と移動は完了できない |
 | `busy` | volume が別の writer に握られている、または期限切れ | 待って再試行してよい（同じ requestId） |
 | `volume-absent` | volume、または書込み先の device が無い（未接続、取り外し済み、`degraded-pack-absent`） | UI に「媒体が無い」を出す。書き込みを再試行しない |
 | `no-space` | device の空き容量の下限（device floor）に当たった（`awai-disk-format.md` §4.7） | 退避か削除を user に求める。**host は証跡や未退避の data を消さない** |
@@ -349,12 +350,12 @@ Response {
 ```
 
 - `closure` は **binary CID 36 B** の昇順・重複なし。`digest` は closure の canonical bytes の sha256。
-- **署名対象**は `v`、`namespaceId`、`rootCid`、`epoch`、`digest` を含む。`signer` の鍵一覧（owner / 許可 client の `keyId`、失効、rotate）は host の control record に保持する。Portable-USB では **container 内の signed manifest** にも置く（下記）。
+- **署名対象**は `v`、`namespaceId`、`rootCid`、`epoch`、`mode`、`chunkCount`、`digest`、`membershipDigest` の**全フィールド**である。`signer` の鍵一覧（owner / 許可 client の `keyId`、失効、rotate）は host の control record に保持する。Portable-USB では **container 内の signed manifest** にも置く（下記）。`mode` と `chunkCount` を署名対象に入れるのは、chunked の取り違え・切り詰めを署名で防ぐためである。
 - `rootCid` は namespace capability に束縛する。epoch を跨いで変わる場合は新しい署名を要求する。**root の連続性（前の root からの到達）は WNFS を持つ client が検証する**（host は復号しない）。
-- `membershipDigest` は host が保持する membership の digest。client が現在知っている値を送り、host は一致を確認する（不一致は `closure-digest-mismatch`）。**content CID の登録は `set-closure` ではなく `put` が行う。**
+- `membershipDigest` は host が保持する membership の digest。**canonical bytes は、membership の binary CID（36 B）を昇順・重複なしに並べた canonical DAG-CBOR の sha256**（`digest` と同じ作り方）。client が現在知っている値を送り、host は一致を確認する（不一致は `closure-digest-mismatch`）。**content CID の登録は `set-closure` ではなく `put` が行う。**
 - **1 MiB の制御上限を超える closure** は `mode: "chunked"` で、chunk digest と最終の署名付き commit（または `dataHandle` のページ）として運ぶ。**最終 digest と署名の検証後に原子的に swap** し、途中状態を公開しない。
 - admission bound（最大 CID 数 / 最大 bytes）を設ける。超過は **`closure-too-large`**。値は **未決定**（P0 で 64 GiB profile の CID 数と control record サイズを測って決める）。
-- `set-closure` の応答は `epoch` と `membershipDigest`（更新後の値）。client はその 2 つを保持し、CID 集合を認可の根拠として送り直さない。
+- `set-closure` の応答は `epoch` と、**署名で確定した** `membershipDigest` である。**`put` の応答の `membershipDigest` は暫定**（署名コミット前）で、両者を同じ意味の値として扱わない。
 
 #### 所有の排他
 
@@ -371,12 +372,13 @@ Response {
 | `closure-digest-mismatch` | `digest` が closure / membership と一致しない |
 | `closure-conflict` | 別 client が所有する CID を含む |
 | `closure-too-large` | admission bound の超過 |
+| `manifest-stale` | Portable の signed manifest が最新でない（membership の署名コミット前、または更新の失敗）。`set-closure` で署名コミットするまで、safe-eject と移動は完了できない |
 
 #### 認可の原則
 
 **署名を検証していない集合を認可に使わない。** 使うのは、検証に通った closure set と、`put` が更新した membership だけである。
 
-`put` / `get` / `pin` / `evict` は membership を検査する。`get` は closure set の CID も返せる（closure は保護域である）。`pin` は **membership の content CID だけ**を対象にする。membership が未登録・古い・署名不一致なら `closure-unknown` を返し、**退避と membership 外の読みを拒否する**。
+`put` / `get` / `pin` / `evict` は membership を検査する。`get` は**自分の** closure set（または自分の membership）の CID だけを返せる。**他 client の closure set の CID は返さない。** `pin` は membership の content CID だけを対象にする。`put` と `pin` は、対象 CID が自分または他 client の **closure set** に属する場合に拒否する（`closure-conflict`、または role 不一致）。**membership（content）と closure set の重なりを作らない。** membership が未登録・古い・署名不一致なら `closure-unknown` を返し、**退避と membership 外の読みを拒否する**。
 
 **W4 までの正直な限界:** host が保持するのは、認証済み client の**署名付き自己申告 closure**である。host は WNFS を復号しないので、closure が「現在の root から到達する」ことの暗号学的な証明を検証しない。**cross-client の分離は transport identity の強さまで**（§3.6）。W4 の write proof が入るまで、これを「検証済み closure」と呼ばない（本文では「署名済み closure」と書く）。
 
@@ -444,7 +446,7 @@ Response {
 
 ### 6.3 pin の所有と cross-client の保護
 
-- `pin` は `(target, owner: clientId)` の record を持つ。**target はその client の membership の content CID に限る**（§4.7）。membership 外の pin は `closure-unknown`、closure set の node は pin の対象にしない（保護域である）。
+- `pin` は `(target, owner: clientId)` の record を持つ。**target はその client の membership の content CID に限る**（§4.7）。membership 外の pin は `closure-unknown`。**closure set に属する CID は pin の対象にしない**（membership と closure set の重なりを作らない）。
 - client B の `evict` が client A の pin を指したら、**`unauthorized` で拒否する**。判断は「target のすべての pin の owner が呼び出し元と一致するか」。
 - 拒否と許可のどちらも、**append-only の監査記録**に残す: `requestId`、`clientId`、op、対象、判断、理由、時刻。**秘密値（鍵、capability、平文）を記録しない。**
 - 監査記録は host の control record に置き、client からは読めない（host の UI と、owner の明示的な操作だけが読む）。
