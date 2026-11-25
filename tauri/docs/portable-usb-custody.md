@@ -47,7 +47,8 @@
 ### 2.3 下降の拒否
 
 - slot header に**最小の writer 版**（`minWriterVersion`）を記録する。
-- 読み手は、自分の版が `minWriterVersion` より低ければ **read-only** で開く。KDF 引数がその版の最小より弱い slot は**使わない**（拒否であって、弱い方で開くのではない）。
+- 読み手は、自分の版が `minWriterVersion` より低ければ **read-only** で開く（v3 の外側を読める場合）。KDF 引数がその版の最小より弱い slot は**使わない**（拒否であって、弱い方で開くのではない）。
+- 旧いアプリが v3 の外側（sidecar・container 外殻）を読めない場合は、**read-only または停止**（書かない）。どちらにするかは **R0 で固定する**（改訂案 §21.4）。ここでの「停止」は改訂案 §14 の語義（読みも拒否、`inspect` のみ）を指すが、この文書では read-only と停止のどちらを採るかを決めない。
 - `minWriterVersion` は AAD に含める。**下げる操作を作らない。** 下げられるなら下降の拒否は意味を持たない。
 
 ### 2.4 lease と epoch
@@ -246,7 +247,7 @@ broker の承認回数（B の定義で変わる。数値は [bounded-batch-cons
 
 - **hardware-backed custody。** Passkey は user presence の確認で、secure element による鍵の保持を証明しない。Keystore の鍵が hardware-backed かは端末依存で、**未確認**。
 - **物理的な FBE / FileVault / LUKS。** 媒体の盗難に対する OS の暗号化は OS が持つ（`awai-disk-format.md` §9）。Awai は持たない。
-- **オフライン・媒体全体の巻き戻しの検出。** 検出できない（v1.0 §6）。同一端末は high-water（`(volume-lineage-id, volume-instance-uuid) → writer epoch の最大値`）で検出する。**session id は単調でないので high-water に使わない**（改訂案 §21.6）。**別端末への全体巻き戻しは検出しない。**
+- **オフライン・媒体全体の巻き戻しの検出。** 検出できない（v1.0 §6）。同一端末の high-water は、キーを **`(volume-lineage-id, volume-instance-uuid)`**、値を **「見た最大の writer epoch + 最大の open 回数（単調）」**とする（改訂案 §4.5・§21.6）。キーに instance を入れるので、**`dd` 写し（同じ instance）の巻き戻しは検出でき、正当な clone（別の instance）は誤検出しない**。`session id` は入れない（乱数で大小に意味がない。重複の検出は WAL・地図の session id の集合との照合で別に行う）。**永続化の置き場は未決定**（子 issue 18）。**別端末への全体巻き戻しは検出しない。**
 - **外部暗号レビュー。** v1.0 §6 の順序（R0 固定 → 外部レビュー → R3 出口 → R2 形式凍結）の前段階であり、レビューは未発注・未課金（この task の範囲外）。
 - **Kura の形式（v3）の bytes。** この文書は形式を確定しない。AAD の canonical 形式と golden corpus は Kura の改訂と共通にする。
 - **性能。** §6.3 は見積りで、実測ではない。
