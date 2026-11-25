@@ -1,0 +1,218 @@
+(ns lg-drive.test-plaintext-gate
+  "Transport-gate tests for the drive surface.
+
+  Three invariants are pinned here:
+  - auth fails closed: a missing/blank/mismatched API key is 401 on every xrpc
+    method (reads included), not only when a key happens to be configured;
+  - the three metadata write methods answer 410 without entering the handler, so
+    a plaintext name/hash body can never reach the store;
+  - `/drive/v3/files` keeps its existing behaviour: no key → 401, keyed GET →
+    200, keyed non-GET → 405.
+
+  Every claim is checked twice: once against the pure router (`server/route`)
+  and once through the httpkit-shaped adapter (`server/->ring-handler`). The
+  fake store counts `write-ops`, so 410 plus a zero count proves the handler
+  never ran."
+  (:require [cheshire.core :as json]
+            [clojure.test :refer [deftest is testing]]
+            [lg-drive.server :as server]
+            [lg-drive.store :as store]))
+
+(def ^:private xrpc-prefix "/xrpc/ai.etzhayyim.apps.drive.")
+(def ^:private api-key "test-api-key")
+(def ^:private write-methods ["filesCreate" "filesUpdate" "filesDelete"])
+(def ^:private xrpc-methods (into write-methods ["filesGet" "filesList" "about" "changes"]))
+(def ^:private plaintext-body {"name" "leak.txt"
+                               "parentId" "root"
+                               "mimeType" "text/plain"
+                               "sizeBytes" 5
+                               "sha256" "deadbeef"
+                               "fileId" "aaaaaaaaaaaaaaaa"})
+
+;; ── fake store that counts writes ─────────────────────────────────────────────
+
+(defrecord CountingStore [inner writes]
+  store/DriveStore
+  (get-file-attrs [_ slug] (store/get-file-attrs inner slug))
+  (all-file-attrs [_] (store/all-file-attrs inner))
+  (lookup-slug [_ attr value] (store/lookup-slug inner attr value))
+  (write-ops [_ ops]
+    (swap! writes inc)
+    (store/write-ops inner ops)))
+
+(defn- fresh []
+  (let [writes (atom 0)
+        inner (store/->FakeDriveStore (atom {}))]
+    {:store (->CountingStore inner writes)
+     :inner inner
+     :writes writes}))
+
+(defn- no-writes? [{:keys [writes inner]}]
+  (and (zero? @writes) (empty? (store/all-file-attrs inner))))
+
+;; ── pure-router helpers ───────────────────────────────────────────────────────
+
+(defn- xrpc-route [st {:keys [method name query body supplied expected]}]
+  (server/route (:store st)
+                {:method method
+                 :path (str xrpc-prefix name)
+                 :query query
+                 :body body
+                 :x-api-key supplied
+                 :expected-api-key expected}))
+
+(defn- files-route [st {:keys [method supplied expected query]}]
+  (server/route (:store st)
+                {:method method
+                 :path "/drive/v3/files"
+                 :query query
+                 :x-api-key supplied
+                 :expected-api-key expected}))
+
+;; ── ring adapter helpers ──────────────────────────────────────────────────────
+
+(defn- ring-req [st {:keys [method uri query-string body supplied expected]}]
+  (let [handler (server/->ring-handler (:store st) expected)]
+    (handler {:request-method method
+              :uri uri
+              :query-string query-string
+              :body (when body
+                      (java.io.ByteArrayInputStream.
+                       (.getBytes ^String (json/generate-string body) "UTF-8")))
+              :headers (if supplied {"x-api-key" supplied} {})})))
+
+(defn- ring-xrpc [st {:keys [method name] :as opts}]
+  (ring-req st (assoc opts :uri (str xrpc-prefix name))))
+
+;; ── auth fails closed ─────────────────────────────────────────────────────────
+
+(deftest test-xrpc-without-configured-key-is-401
+  (let [st (fresh)]
+    (doseq [m xrpc-methods]
+      (is (= 401 (:status (xrpc-route st {:method (if (some #{m} write-methods) :post :get)
+                                          :name m
+                                          :supplied api-key})))
+          (str m " must not pass with no configured key")))))
+
+(deftest test-xrpc-blank-or-wrong-key-is-401
+  (let [st (fresh)]
+    (doseq [[expected supplied label]
+            [[nil api-key "no configured key"]
+             ["" api-key "empty configured key"]
+             ["   " api-key "blank configured key"]
+             [api-key "" "empty supplied key"]
+             [api-key nil "missing supplied key"]
+             [api-key "wrong" "mismatched supplied key"]]]
+      (is (= 401 (:status (xrpc-route st {:method :get
+                                          :name "filesList"
+                                          :expected expected
+                                          :supplied supplied})))
+          label))))
+
+;; ── metadata writes are gone ──────────────────────────────────────────────────
+
+(deftest test-xrpc-writes-are-410-without-touching-store
+  (doseq [m write-methods]
+    (let [st (fresh)
+          res (xrpc-route st {:method :post
+                              :name m
+                              :expected api-key
+                              :supplied api-key
+                              :body plaintext-body})]
+      (is (= 410 (:status res)) (str m " must be 410"))
+      (is (no-writes? st) (str m " must not write to the store")))))
+
+(deftest test-xrpc-writes-without-key-are-401-not-410
+  (let [st (fresh)]
+    (doseq [m write-methods]
+      (is (= 401 (:status (xrpc-route st {:method :post
+                                          :name m
+                                          :body plaintext-body})))
+          (str m " must fail auth before deprecation"))
+      (is (no-writes? st)))))
+
+;; ── reads keep working when authorized ────────────────────────────────────────
+
+(deftest test-xrpc-reads-are-200-with-key
+  (let [st (fresh)]
+    (doseq [[m method query] [["filesGet" :get {"fileId" "missing000001"}]
+                              ["filesList" :get {}]
+                              ["about" :get {}]
+                              ["changes" :get {}]]]
+      (is (= 200 (:status (xrpc-route st {:method method
+                                          :name m
+                                          :query query
+                                          :expected api-key
+                                          :supplied api-key})))
+          (str m " read must stay 200 with a key")))))
+
+;; ── google skin unchanged ─────────────────────────────────────────────────────
+
+(deftest test-google-files-auth-behaviour-is-pinned
+  (let [st (fresh)]
+    (testing "no key / blank key"
+      (is (= 401 (:status (files-route st {:method :get}))))
+      (is (= 401 (:status (files-route st {:method :get :expected "" :supplied ""})))))
+    (testing "authorized GET"
+      (is (= 200 (:status (files-route st {:method :get
+                                           :expected api-key
+                                           :supplied api-key
+                                           :query {"fields" "kind,files(id,name)"}})))))
+    (testing "authorized non-GET"
+      (is (= 405 (:status (files-route st {:method :post
+                                           :expected api-key
+                                           :supplied api-key})))))
+    (is (no-writes? st))))
+
+;; ── the same through the ring adapter ────────────────────────────────────────
+
+(deftest test-ring-xrpc-auth-fails-closed
+  (let [st (fresh)]
+    (doseq [m xrpc-methods]
+      (is (= 401 (:status (ring-xrpc st {:method (if (some #{m} write-methods) :post :get)
+                                         :name m
+                                         :supplied api-key})))
+          (str "ring " m " must be 401 with no configured key"))
+      (is (= 401 (:status (ring-xrpc st {:method (if (some #{m} write-methods) :post :get)
+                                         :name m
+                                         :expected api-key
+                                         :supplied "wrong"})))
+          (str "ring " m " must be 401 on key mismatch")))
+    (is (no-writes? st))))
+
+(deftest test-ring-xrpc-writes-are-410-without-touching-store
+  (doseq [m write-methods]
+    (let [st (fresh)
+          res (ring-xrpc st {:method :post
+                             :name m
+                             :expected api-key
+                             :supplied api-key
+                             :body plaintext-body})]
+      (is (= 410 (:status res)) (str "ring " m " must be 410"))
+      (is (no-writes? st) (str "ring " m " must not write to the store")))))
+
+(deftest test-ring-xrpc-reads-are-200-with-key
+  (let [st (fresh)]
+    (doseq [[m method query] [["filesGet" :get "fileId=missing000001"]
+                              ["filesList" :get nil]
+                              ["about" :get nil]
+                              ["changes" :get nil]]]
+      (is (= 200 (:status (ring-xrpc st {:method method
+                                         :name m
+                                         :query-string query
+                                         :expected api-key
+                                         :supplied api-key})))
+          (str "ring " m " must be 200")))))
+
+(deftest test-ring-google-files-behaviour-is-pinned
+  (let [st (fresh)]
+    (is (= 401 (:status (ring-req st {:method :get :uri "/drive/v3/files"}))))
+    (is (= 200 (:status (ring-req st {:method :get
+                                      :uri "/drive/v3/files"
+                                      :expected api-key
+                                      :supplied api-key}))))
+    (is (= 405 (:status (ring-req st {:method :post
+                                      :uri "/drive/v3/files"
+                                      :expected api-key
+                                      :supplied api-key}))))
+    (is (no-writes? st))))

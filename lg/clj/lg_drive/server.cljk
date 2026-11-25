@@ -5,13 +5,19 @@
   forwards to (drive.etzhayyim.com/xrpc/... → lg-drive:8000/xrpc/...):
 
     GET  /health /ok
-    POST /xrpc/ai.etzhayyim.apps.drive.filesCreate
+    POST /xrpc/ai.etzhayyim.apps.drive.filesCreate  (retired: 410)
     GET  /xrpc/ai.etzhayyim.apps.drive.filesGet
     GET  /xrpc/ai.etzhayyim.apps.drive.filesList
-    POST /xrpc/ai.etzhayyim.apps.drive.filesUpdate
-    POST /xrpc/ai.etzhayyim.apps.drive.filesDelete
+    POST /xrpc/ai.etzhayyim.apps.drive.filesUpdate  (retired: 410)
+    POST /xrpc/ai.etzhayyim.apps.drive.filesDelete  (retired: 410)
     GET  /xrpc/ai.etzhayyim.apps.drive.about
     GET  /xrpc/ai.etzhayyim.apps.drive.changes
+
+  filesCreate / filesUpdate / filesDelete answer 410 and never enter a handler.
+  x-api-key is required on every xrpc method: no configured key (nil or blank)
+  is 401, and so is a missing or mismatched supplied key. The key is checked
+  first, so a retired method without a valid key is 401, not 410. GET /health
+  and GET /ok take no key.
 
   FastAPI → babashka httpkit; pydantic body → cheshire JSON. Persistence =
   kotoba datomic (graph `drive-v1`). `route` is a pure dispatch fn (store, request)
@@ -27,11 +33,14 @@
 ;; ── auth (Python `_enforce_auth`) ────────────────────────────────────────────
 
 (defn enforce-auth!
-  "Throw a 401 ex-info if LG_DRIVE_API_KEY is set and x-api-key mismatches."
+  "Throw a 401 ex-info unless a non-blank expected key is configured AND
+  x-api-key matches it. Fail closed: no configured key is a refusal, not an
+  open door."
   [expected x-api-key]
-  (when (and expected (not (str/blank? expected))
-               (or (str/blank? (or x-api-key "")) (not= x-api-key expected)))
-      (throw (ex-info "x-api-key mismatch" {:status 401}))))
+  (when (or (str/blank? (or expected ""))
+            (str/blank? (or x-api-key ""))
+            (not= x-api-key expected))
+    (throw (ex-info "x-api-key required or mismatched" {:status 401}))))
 
 ;; ── query-string parsing ──────────────────────────────────────────────────────
 
@@ -71,9 +80,12 @@
         (enforce-auth! expected-api-key x-api-key)
         (let [m (subs path (count xrpc-prefix))]
           (case m
-            "filesCreate" {:status 200 :json (h/files-create st body)}
-            "filesUpdate" {:status 200 :json (h/files-update st body)}
-            "filesDelete" {:status 200 :json (h/files-delete st body)}
+            ;; Metadata writes are retired at the transport: the handler is
+            ;; never invoked, so a plaintext name/hash body cannot reach the
+            ;; store. Binary content lives in the content-addressed blob layer.
+            "filesCreate" {:status 410 :json {"error" "method retired" "method" m}}
+            "filesUpdate" {:status 410 :json {"error" "method retired" "method" m}}
+            "filesDelete" {:status 410 :json {"error" "method retired" "method" m}}
             "filesGet"    {:status 200 :json (h/files-get st query)}
             "filesList"   {:status 200 :json (h/files-list st query)}
             "about"       {:status 200 :json (h/about st query)}

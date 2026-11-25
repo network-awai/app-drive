@@ -13,7 +13,8 @@
 (def suites
   '[lg-drive.test-handlers
     lg-drive.test-graph
-    lg-drive.test-google-drive])
+    lg-drive.test-google-drive
+    lg-drive.test-plaintext-gate])
 
 (apply require suites)
 
