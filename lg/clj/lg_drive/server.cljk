@@ -27,11 +27,14 @@
 ;; ── auth (Python `_enforce_auth`) ────────────────────────────────────────────
 
 (defn enforce-auth!
-  "Throw a 401 ex-info if LG_DRIVE_API_KEY is set and x-api-key mismatches."
+  "Throw a 401 ex-info unless a non-blank expected key is configured AND
+  x-api-key matches it. Fail closed: no configured key is a refusal, not an
+  open door."
   [expected x-api-key]
-  (when (and expected (not (str/blank? expected))
-               (or (str/blank? (or x-api-key "")) (not= x-api-key expected)))
-      (throw (ex-info "x-api-key mismatch" {:status 401}))))
+  (when (or (str/blank? (or expected ""))
+            (str/blank? (or x-api-key ""))
+            (not= x-api-key expected))
+    (throw (ex-info "x-api-key required or mismatched" {:status 401}))))
 
 ;; ── query-string parsing ──────────────────────────────────────────────────────
 
@@ -71,9 +74,12 @@
         (enforce-auth! expected-api-key x-api-key)
         (let [m (subs path (count xrpc-prefix))]
           (case m
-            "filesCreate" {:status 200 :json (h/files-create st body)}
-            "filesUpdate" {:status 200 :json (h/files-update st body)}
-            "filesDelete" {:status 200 :json (h/files-delete st body)}
+            ;; Metadata writes are retired at the transport: the handler is
+            ;; never invoked, so a plaintext name/hash body cannot reach the
+            ;; store. Binary content lives in the content-addressed blob layer.
+            "filesCreate" {:status 410 :json {"error" "method retired" "method" m}}
+            "filesUpdate" {:status 410 :json {"error" "method retired" "method" m}}
+            "filesDelete" {:status 410 :json {"error" "method retired" "method" m}}
             "filesGet"    {:status 200 :json (h/files-get st query)}
             "filesList"   {:status 200 :json (h/files-list st query)}
             "about"       {:status 200 :json (h/about st query)}
