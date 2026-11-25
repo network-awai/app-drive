@@ -195,7 +195,9 @@ streams it to app-private staging, and verifies the copy's SHA-256 before it
 appears in Drive. A name collision leaves the existing destination intact. The
 source file and volume remain available in Finder. Imports stay local until
 the user uses the existing sync flow. The file size limit is 1 GiB on both
-platforms. Android continues to use its existing local document picker.
+platforms (macOS `desktop.rs:16` `MAX_IMPORT`; Android
+`DriveFiles.java:10` `MAX_BYTES`). Android continues to use its existing
+local document picker.
 
 This selected-file workflow carries file bytes and their names. It does not
 translate the legacy journal, access rules, history, remote keys, or leases.

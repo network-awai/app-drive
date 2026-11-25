@@ -49,6 +49,43 @@ fn sync_dir(p: &Path) -> Result<(), String> {
     fs::File::open(p).and_then(|f| f.sync_all()).map_err(io)
 }
 
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Stream `input` into `output`, hashing on the way. Fails with
+/// `source-size-changed` when more bytes arrive than `before_len` declares —
+/// i.e. the (possibly mounted) source grew while it was being copied.
+fn stream_copy<S: Read>(
+    input: &mut S,
+    output: &mut fs::File,
+    before_len: u64,
+) -> Result<(u64, [u8; 32]), String> {
+    let mut buf = vec![0; 256 * 1024];
+    let mut total = 0u64;
+    let mut source_hash = Sha256::new();
+    loop {
+        let n = input.read(&mut buf).map_err(io)?;
+        if n == 0 { break; }
+        total += n as u64;
+        if total > before_len { return Err("source-size-changed".into()); }
+        output.write_all(&buf[..n]).map_err(io)?;
+        source_hash.update(&buf[..n]);
+    }
+    Ok((total, source_hash.finalize().into()))
+}
+
+/// Refuse when the source changed across the copy, as observed from the size,
+/// mtime and ctime before and after the bytes were read.
+fn check_unchanged(before: &fs::Metadata, after: &fs::Metadata, total: u64) -> Result<(), String> {
+    if total != before.len() || after.len() != before.len() ||
+        (before.mtime(), before.mtime_nsec(), before.ctime(), before.ctime_nsec()) !=
+        (after.mtime(), after.mtime_nsec(), after.ctime(), after.ctime_nsec()) {
+        return Err("source-size-changed".into());
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 pub(crate) fn available(p: &Path) -> Option<u64> {
     use std::ffi::CString;
@@ -316,6 +353,21 @@ impl Local {
     /// Copy a file explicitly selected by the native picker into Drive storage.
     /// Never write into the selected volume or take a source path from the WebView.
     pub fn import(&self, parent: &str, source: &Path) -> Result<serde_json::Value, String> {
+        self.import_with(parent, source, &available, &|_| {})
+    }
+
+    /// `free_space` reports the destination volume's free bytes (real
+    /// `available` in production, faked in tests so `storage-full` is
+    /// reachable without filling a disk). `corrupt_tmp` runs after the staged
+    /// copy is synced but before it is re-hashed — a no-op in production; tests
+    /// use it to force `restore-mismatch`.
+    fn import_with(
+        &self,
+        parent: &str,
+        source: &Path,
+        free_space: &dyn Fn(&Path) -> Option<u64>,
+        corrupt_tmp: &dyn Fn(&Path),
+    ) -> Result<serde_json::Value, String> {
         let name = source.file_name().and_then(|n| n.to_str()).ok_or("invalid-name")?;
         if self.list(parent)?.len() >= MAX_ENTRIES {
             return Err("entry-limit".into());
@@ -340,7 +392,7 @@ impl Local {
         if before.len() > MAX_IMPORT {
             return Err("file-too-large".into());
         }
-        if available(&dir).is_some_and(|free| free < RESERVE + before.len()) {
+        if free_space(&dir).is_some_and(|free| free < RESERVE + before.len()) {
             return Err("storage-full".into());
         }
         let stamp = std::time::SystemTime::now()
@@ -353,27 +405,14 @@ impl Local {
             .open(&tmp).map_err(io)?;
 
         let result = (|| {
-            let mut buf = vec![0; 256 * 1024];
-            let mut total = 0u64;
-            let mut source_hash = Sha256::new();
-            loop {
-                let n = input.read(&mut buf).map_err(io)?;
-                if n == 0 { break; }
-                total += n as u64;
-                if total > before.len() { return Err("source-size-changed".into()); }
-                output.write_all(&buf[..n]).map_err(io)?;
-                source_hash.update(&buf[..n]);
-            }
+            let (total, expected) = stream_copy(&mut input, &mut output, before.len())?;
             let after = input.metadata().map_err(io)?;
-            if total != before.len() || after.len() != before.len() ||
-                (before.mtime(), before.mtime_nsec(), before.ctime(), before.ctime_nsec()) !=
-                (after.mtime(), after.mtime_nsec(), after.ctime(), after.ctime_nsec()) {
-                return Err("source-size-changed".into());
-            }
+            check_unchanged(&before, &after, total)?;
             output.sync_all().map_err(io)?;
             drop(output);
+            corrupt_tmp(&tmp);
 
-            let expected = source_hash.finalize();
+            let mut buf = vec![0; 256 * 1024];
             let mut saved = fs::File::open(&tmp).map_err(io)?;
             let mut copy_hash = Sha256::new();
             loop {
@@ -381,12 +420,13 @@ impl Local {
                 if n == 0 { break; }
                 copy_hash.update(&buf[..n]);
             }
-            if copy_hash.finalize() != expected {
+            let restored: [u8; 32] = copy_hash.finalize().into();
+            if restored != expected {
                 return Err("restore-mismatch".into());
             }
             fs::hard_link(&tmp, &dest).map_err(io)?;
             sync_dir(&dir)?;
-            Ok(serde_json::json!({"path": self.path(&dest), "sha256": format!("{:x}", expected), "bytes": total}))
+            Ok(serde_json::json!({"path": self.path(&dest), "sha256": hex(&expected), "bytes": total}))
         })();
         let _ = fs::remove_file(&tmp);
         result
@@ -516,5 +556,95 @@ mod tests {
         let l = temp();
         l.create_text("", "e\u{301}.txt", "x").unwrap();
         assert_eq!(l.list("").unwrap()[0]["name"], "\u{e9}.txt");
+    }
+
+    #[test]
+    fn import_failure_paths() {
+        // `file-too-large`: a sparse MAX_IMPORT+1 file is refused from its
+        // declared length alone, without reading any of its bytes.
+        let l = temp();
+        let huge = l.root.parent().unwrap().join("huge.bin");
+        fs::OpenOptions::new().write(true).create_new(true).open(&huge).unwrap()
+            .set_len(MAX_IMPORT + 1).unwrap();
+        assert_eq!(l.import("", &huge), Err("file-too-large".to_string()));
+        assert!(l.list("").unwrap().is_empty());
+        fs::remove_file(&huge).unwrap();
+
+        // `storage-full`: faked free-space lookup (real `available` is not
+        // replaceable), so the branch runs without filling a real disk.
+        let source = l.root.parent().unwrap().join("source.bin");
+        fs::write(&source, vec![7u8; 4096]).unwrap();
+        assert_eq!(
+            l.import_with("", &source, &|_| Some(0), &|_| {}),
+            Err("storage-full".to_string())
+        );
+        assert!(l.list("").unwrap().is_empty());
+
+        // `restore-mismatch`: corrupt the staged copy after it is synced but
+        // before it is re-hashed; nothing is published and the source is kept.
+        assert_eq!(
+            l.import_with("", &source, &available, &|tmp| {
+                fs::write(tmp, b"tampered").unwrap();
+            }),
+            Err("restore-mismatch".to_string())
+        );
+        assert!(l.list("").unwrap().is_empty());
+        assert_eq!(fs::read(&source).unwrap(), vec![7u8; 4096]);
+
+        // Duplicate-name refusal keeps both sides untouched (explicit case:
+        // a different source with the same name must not replace anything).
+        l.import("", &source).unwrap();
+        let other = l.root.parent().unwrap().join("other").join("source.bin");
+        fs::create_dir_all(other.parent().unwrap()).unwrap();
+        fs::write(&other, b"different").unwrap();
+        assert_eq!(l.import("", &other), Err("file-exists".to_string()));
+        assert_eq!(fs::read(l.file("source.bin").unwrap()).unwrap(), vec![7u8; 4096]);
+        assert_eq!(fs::read(&other).unwrap(), b"different");
+        fs::remove_file(&source).unwrap();
+        fs::remove_file(&other).unwrap();
+    }
+
+    #[test]
+    fn stream_copy_detects_source_growth_and_shrinkage() {
+        // A mounted source (e.g. AwaiVol over WebDAV) can grow while it is
+        // read — the copy must fail `source-size-changed` instead of hashing
+        // bytes the size check never saw.
+        let dir = std::env::temp_dir().join(format!("awai-drive-copy-{}-{}",
+            std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("out.part");
+        let mutate = |input: &[u8], before_len: u64| -> Result<(u64, [u8; 32]), String> {
+            let f = fs::OpenOptions::new().write(true).read(true).create(true).truncate(true).open(&out).unwrap();
+            let mut f = f;
+            stream_copy(&mut &input[..], &mut f, before_len)
+        };
+        // Growth: reader yields more than the declared length.
+        assert_eq!(mutate(b"abc", 2).unwrap_err(), "source-size-changed");
+        // Shrinkage: reader yields fewer bytes; the post-copy size check owns
+        // that case, but stream_copy must at least return the short total.
+        let (total, hash) = mutate(b"a", 2).unwrap();
+        assert_eq!(total, 1);
+        let want: [u8; 32] = Sha256::digest(b"a").into();
+        assert_eq!(hash, want);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn check_unchanged_detects_source_mutation() {
+        let dir = std::env::temp_dir().join(format!("awai-drive-changed-{}-{}",
+            std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("sample.bin");
+        fs::write(&f, b"ab").unwrap();
+        let before = fs::symlink_metadata(&f).unwrap();
+        // Unchanged source with the full byte count passes.
+        assert!(check_unchanged(&before, &before, 2).is_ok());
+        // Appending to the source (length + timestamps change) is refused.
+        fs::OpenOptions::new().append(true).open(&f).unwrap().write_all(b"c").unwrap();
+        let after = fs::symlink_metadata(&f).unwrap();
+        assert_eq!(check_unchanged(&before, &after, 2), Err("source-size-changed".to_string()));
+        // Same metadata, wrong byte count, is refused as well.
+        assert_eq!(check_unchanged(&before, &before, 1), Err("source-size-changed".to_string()));
+        fs::remove_dir_all(&dir).unwrap();
     }
 }
