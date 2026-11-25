@@ -8,6 +8,7 @@ const expected = {
   ...pins.yataverse.files,
   ...pins.accountLink.files,
   'kotoba-client-runtime.js': pins.runtime,
+  'wnfs-account.js': pins.wnfsAccount,
 };
 
 for (const [file, pin] of Object.entries(expected)) {

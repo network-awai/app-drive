@@ -36,9 +36,10 @@ function computeInWorker(operation, session, input, buffers) {
 }
 
 export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, compute = computeInWorker }) {
-  async function restoreCopy(rows, legacy = false, shared) {
+  async function restoreCopy(rows, legacy = false, shared, { signal, progress } = {}) {
     let operation;
     try {
+      signal?.throwIfAborted();
       ({ operation } = await invoke('vaultWnfsRestoreBegin', { legacy, ...shared }));
       if (!operation) throw Error('restore-operation-missing');
       for (const { path, directory, chunks } of rows) {
@@ -46,6 +47,7 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
         let offset = 0;
         for (const chunk of chunks) {
           for (let start = 0; start < chunk.length; start += CHUNK_BYTES) {
+            signal?.throwIfAborted();
             const piece = chunk.subarray(start, start + CHUNK_BYTES);
             await invoke('vaultWnfsRestoreWrite', { operation, path, offset, bytes: b64(piece) });
             offset += piece.length;
@@ -53,6 +55,8 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
         }
         if (offset === 0) await invoke('vaultWnfsRestoreWrite', { operation, path, offset: 0, bytes: '' });
       }
+      signal?.throwIfAborted();
+      progress?.({ phase: 'publish' });
       return await invoke('vaultWnfsRestorePublish', { operation });
     } catch (error) {
       if (operation) await invoke('vaultWnfsRestoreAbort', { operation }).catch(() => {});
@@ -72,25 +76,32 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
     }
   }
 
-  async function readSnapshot(session, operation, extension, guard) {
+  async function readSnapshot(session, operation, extension, guard, { signal, progress } = {}) {
     const head = session.wnfs;
     validateHead(head);
     const started = performance.now();
+    signal?.throwIfAborted();
+    progress?.({ phase: 'fetch', bytes: 0 });
     if (guard) await guard();
     const capsule = await packs.download(head.capsule);
     if (capsule.length > 262144) throw Error('invalid-wnfs-snapshot');
     const capsuleBytes = capsule.length;
     const data = [];
     let size = 0;
+    progress?.({ phase: 'fetch', bytes: capsuleBytes });
     for (const id of head.packs) {
+      signal?.throwIfAborted();
       if (guard) await guard();
       const pack = await packs.download(id);
       size += pack.length;
       if (size > 4 * PACK_BYTES) throw Error('invalid-wnfs-snapshot');
       data.push(pack);
+      progress?.({ phase: 'fetch', bytes: size + capsuleBytes });
     }
+    signal?.throwIfAborted();
     if (guard) await guard();
     const fetched = performance.now();
+    progress?.({ phase: 'verify' });
     const snapshot = await compute(operation, session, { root: head.root, capsule, packs: data, extension },
       [capsule.buffer, ...data.map(pack => pack.buffer)]);
     if (guard) await guard();
@@ -143,18 +154,19 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
       return invoke('vaultWnfsRecipientSet', { id: verified.id, recipient: verified });
     },
     revoke: id => invoke('vaultWnfsRecipientSet', { id }),
-    async restoreShared(session, grant) {
+    async restoreShared(session, grant, controls) {
       const recipient = await compute('public-recipient', session, {}, []);
       if (grant?.schema !== 'awai.drive.wnfs.grant.v1' || grant.recipient !== recipient.id ||
           typeof grant.basis !== 'string' || !grant.basis) throw Error('invalid-snapshot-grant');
-      const snapshot = await readSnapshot({ ...session, wnfs: grant.head }, 'open-share', 'txt');
+      const snapshot = await readSnapshot({ ...session, wnfs: grant.head }, 'open-share', 'txt', undefined, controls);
       const { rows, entries, ...verified } = snapshot;
       if (verified.basis !== grant.basis) {
         for (const { chunks = [] } of rows) for (const chunk of chunks) chunk.fill(0);
         throw Error('snapshot-basis-mismatch');
       }
-      const published = await restoreCopy(rows, false, { share: grant.head.capsule, entries });
-      return { ...published, ...verified };
+      const started = performance.now();
+      const published = await restoreCopy(rows, false, { share: grant.head.capsule, entries }, controls);
+      return { ...published, ...verified, publishMs: performance.now() - started };
     },
     async sync(session) {
       const { entries } = await invoke('vaultWnfsInventory');
@@ -185,7 +197,14 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
         const packBytes = sealed.packs.reduce((n, pack) => n + pack.length, sealed.capsule.bytes.length);
         const dataIds = [];
         for (const pack of sealed.packs) dataIds.push(await packs.publish(pack, verifyReceipt));
-        const capsule = await packs.publish(sealed.capsule.bytes, verifyReceipt);
+        // Keep the verified storage receipt of the new root capsule only (owner decision 2026-11-22):
+        // the vault overwrites it on each commit, restore does not need it, eviction requires it.
+        let receipt = null;
+        const capsule = await packs.publish(sealed.capsule.bytes, verifyReceipt && (async (response, expected) => {
+          const verified = await verifyReceipt(response, expected);
+          if (verified) receipt = { pack: expected.id, receiptCid: verified.receiptCid, keyId: verified.keyId,
+            keyEpoch: verified.keyEpoch, receipt: response.receipt };
+        }));
         const grants = [];
         for (const { recipient, capsule: wrapped } of sealed.grants ?? []) {
           const id = await packs.publish(wrapped.bytes, verifyReceipt);
@@ -193,7 +212,10 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
             head: { schema: 'awai.drive.wnfs.v1', origin, root: wrapped.root, capsule: id, packs: dataIds } });
         }
         const publishedAt = performance.now();
-        await invoke('vaultWnfsCommit', { root: sealed.capsule.root, capsule, packs: dataIds, origin, entries, recipientRevision: revision });
+        await invoke('vaultWnfsCommit', {
+          root: sealed.capsule.root, capsule, packs: dataIds, origin, entries, recipientRevision: revision,
+          basis: sealed.basis, receipt,
+        });
         return { files: rows.filter(row => !row.directory).length, basis: sealed.basis,
           bytes: packBytes, grants, dataPacks: dataIds.length, sealMs: publishStart - sealStart, publishMs: publishedAt - publishStart };
       } finally {
@@ -223,14 +245,14 @@ export function createWnfsSync({ invoke, origin, packs, verifyReceipt, sha256, c
       return catalogAuthorizedAccount({subject, sources: admitted}, guard);
     },
 
-    async restore(session) {
-      const snapshot = await readSnapshot(session, 'open', 'txt');
+    async restore(session, controls) {
+      const snapshot = await readSnapshot(session, 'open', 'txt', undefined, controls);
       // The production worker returns basis and query results with the
       // decrypted rows. Preserve old callers that supply only an array.
-      if (Array.isArray(snapshot)) return restoreCopy(snapshot);
+      if (Array.isArray(snapshot)) return restoreCopy(snapshot, false, undefined, controls);
       const { rows, ...verified } = snapshot;
       const started = performance.now();
-      const published = await restoreCopy(rows);
+      const published = await restoreCopy(rows, false, undefined, controls);
       return { ...published, ...verified, publishMs: performance.now() - started };
     },
 

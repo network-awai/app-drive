@@ -5,9 +5,9 @@ import*as encryptedSync from'./sync.js';
 import './core.js';
 import {translator,messages} from './i18n.js';
 import {searchFiles,searchCatalog,fileKind} from './search.js';
-import {createDriveAccountLink} from './account-link.js';
-import {runtimeFor,accountOperation} from './sync-contract.js';
-import {accountLinkEnabled} from './sync-config.js';
+import {mountAccount} from './account-view.js';
+import {mountRestore} from './restore-view.js';
+import {accountLinkEnabled, wnfsEnabled} from './sync-config.js';
 const {lang,t,bytes}=translator(navigator.language);document.documentElement.lang=lang;document.querySelectorAll('[data-i18n]').forEach(n=>n.textContent=t(n.dataset.i18n));document.querySelectorAll('[data-i18n-aria]').forEach(n=>n.setAttribute('aria-label',t(n.dataset.i18nAria)));
 import {createHost} from './host.js';
 import {clientRuntimeProblems,createClientConsentHost,createClientOperationBroker} from './runtime.js';
@@ -19,7 +19,7 @@ const core=window.AwaiDriveCore,$=id=>document.getElementById(id),host=createHos
 function syncNavigation() {
   const section = location.hash || '#drive-search';
   for (const link of document.querySelectorAll('.drive-nav a')) {
-    if (link.hash === section) link.setAttribute('aria-current', 'location');
+    if (link.hash === (section === '#cloud-restore' ? '#files' : section)) link.setAttribute('aria-current', 'location');
     else link.removeAttribute('aria-current');
   }
 }
@@ -188,7 +188,17 @@ async function restoreFiles(legacy=false) {
   await list();
   message(t(result.folder?'sync.restoredCopy':'sync.restored'));
 }
-$('restore').onclick=()=>task(()=>restoreFiles());
+const openRestore = mountRestore({
+  sync: encryptedSync, t, bytes,
+  onOpen: () => { location.hash = '#cloud-restore'; showFlowRoute(); },
+  onFiles: (folder = '') => task(async () => {
+    parent = folder;
+    location.hash = '#files';
+    await list();
+    $('files').focus();
+  }),
+});
+$('restore').onclick = () => wnfsEnabled ? openRestore().catch(fail) : task(() => restoreFiles());
 $('restore-legacy').onclick=()=>task(()=>restoreFiles(true));
 $('evict').onclick=()=>{$('evict-confirm').showModal();};
 $('evict-cancel').onclick=()=>$('evict-confirm').close();
@@ -196,70 +206,16 @@ $('evict-allow').onclick=()=>{$('evict-confirm').close();task(async()=>{await en
 if(!encryptedSync.configured){$('sync').hidden=true;$('restore').hidden=true;$('evict').hidden=true;}
 else $('search-scope-field').hidden = false;
 
-if (accountLinkEnabled && /Android/i.test(navigator.userAgent)) {
-  const accountBroker = createClientOperationBroker({
-    runtime: runtimeFor('', false, true),
-    requestedCapabilities: [accountOperation.capability],
-    approvedOperations: [accountOperation],
-    hostSupportedOperations: [[accountOperation.capability, accountOperation.service, accountOperation.operation]],
-    consentHost: createClientConsentHost(),
-  });
-  const account = createDriveAccountLink({
-    call,
-    approve: ({capability, service, operation}, input, signal) =>
-      accountBroker.invoke({capability, service, operation}, {input, init: {method: 'GET'}}, {signal}),
-  });
-  let pending, waiting;
-  const status = value => { $('account-status').textContent = value; };
-  const showAccount = value => status(value ? t('account.linked', {did: value.accountDid}) : t('account.unlinked'));
-  const clearRequest = () => {
-    pending = undefined;
-    $('account-url').value = '';
-    $('account-code').textContent = '';
-    $('account-request').hidden = true;
-  };
-  $('drive-account').hidden = false;
-  account.linkedAccount().then(showAccount).catch(() => status(t('account.failed')));
-  $('account-begin').onclick = async () => {
-    if (waiting) return;
-    $('account-begin').disabled = true;
-    try {
-      pending = await account.begin();
-      $('account-code').textContent = t('account.code', {code: pending.code});
-      $('account-url').value = pending.url;
-      $('account-request').hidden = false;
-      $('account-url').focus();
-      status('');
-    } catch {
-      status(t('account.failed'));
-    } finally {
-      $('account-begin').disabled = false;
-    }
-  };
-  $('account-receive').onclick = async () => {
-    if (!pending || waiting) return;
-    waiting = new AbortController();
-    const signal = waiting.signal;
-    const timer = setTimeout(() => waiting.abort(), 10 * 60 * 1000);
-    $('account-receive').disabled = true;
-    try {
-      status(t('account.waiting'));
-      showAccount(await pending.finish(signal));
-    } catch (error) {
-      status(t(signal.aborted || error.message === 'client operation was not approved'
-        ? 'account.cancelled' : error.message === 'account-mismatch' ? 'account.mismatch' : 'account.failed'));
-    } finally {
-      clearTimeout(timer);
-      waiting = undefined;
-      clearRequest();
-      $('account-receive').disabled = false;
-      $('account-begin').focus();
-    }
-  };
-  $('account-cancel').onclick = () => {
-    waiting?.abort();
-    clearRequest();
-    status(t('account.cancelled'));
-    $('account-begin').focus();
-  };
+const platform = /Android/i.test(navigator.userAgent) ? 'android' :
+  /Macintosh/i.test(navigator.userAgent) ? 'mac' : '';
+document.documentElement.dataset.platform = platform;
+function showFlowRoute() {
+  document.body.dataset.flow = location.hash === '#device-panel' && !$('drive-account').hidden ? 'account' :
+    location.hash === '#cloud-restore' && $('cloud-restore')?.hidden === false ? 'restore' : '';
 }
+if (accountLinkEnabled && platform) {
+  mountAccount({ platform, call, t, sync: encryptedSync, openRestore: () => $('restore').click() });
+}
+window.addEventListener('hashchange', showFlowRoute);
+showFlowRoute();
+if (wnfsEnabled && encryptedSync.configured && location.hash === '#cloud-restore') openRestore().catch(fail);

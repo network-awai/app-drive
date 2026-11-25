@@ -87,8 +87,20 @@ the pack ID, size, requester 0) and claims only `local-durable-readback`. A
 missing or failing receipt stops sync before the readback GET; nothing is marked
 synced and eviction stays refused. Keys are not fetched at run time, so there is
 no extra operation, consent or CSP entry; rotating the service key needs a Drive
-rebuild with the new key set, and until then sync fails closed. The receipt is
-not kept in the device control record. Origins not in `receipt-trust.json`
+rebuild with the new key set, and until then sync fails closed. A key set may
+pin several epochs: keep a rotated key with its `notAfter`/`revokedAt` so receipts
+signed under the older epoch still verify; the build refuses duplicate or
+malformed key entries. The verifier also computes the receipt's CID (CIDv1
+dag-cbor of the canonical `{v, receipt, sig}` record, the service's
+`receiptCid`) and refuses a response whose `receiptCid` differs.
+
+The macOS control record (sealed by the login-Keychain key) keeps the verified
+receipt of the current WNFS root capsule only: `receipt`, `receiptCid`, `keyId`
+and `keyEpoch`. Each commit replaces it, and no history is kept (owner decision
+2026-11-22). Restore does not require it. Eviction requires the vault to report
+a verified receipt for its current root; a vault that does not (Android today,
+or an origin without pinned keys) is not offered eviction.
+Origins not in `receipt-trust.json`
 (including the loopback fixture) keep the plain `{sha256, bytes}` check.
 [VM qualification 2026-11-18](encrypted-sync-receipt-qualification-20261118.md).
 

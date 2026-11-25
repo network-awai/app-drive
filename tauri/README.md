@@ -128,20 +128,55 @@ historical. [Encrypted VM qualification](docs/encrypted-sync-qualification-20261
 records the new evidence and handoff. Physical6600H installation is explicitly
 held by the owner; no physical disks, Nix/EFI, accounts or keys were modified.
 
-## macOS build (AWAI-3256)
+## macOS build
 
 The same app builds for macOS with Tauri. File operations use a bounded Rust adapter
 (`src-tauri/src/desktop.rs`) with the Android `DriveFiles` rules: validated, NFC-normalised
 names; paths confined to one app-private root
 (`~/Library/Application Support/network.awai.drive/drive-local-v1`); symlinks refused; at most
 1000 entries per folder; notes up to 64 KiB; saves published by an atomic no-clobber link.
-`open` hands a file to the default viewer through `/usr/bin/open`. File import and encrypted
-sync are not available on macOS yet: `pick` returns `import-unavailable`, `vaultStatus` reports
-not configured, and the other vault operations return `android-adapter-required`. This app is
-separate from the existing Swift AwaiDrive.app (`com.kotoba.awaivol.drive`).
+`open` hands a file to the default viewer through `/usr/bin/open`. File import through
+`pick` remains unavailable. With the WNFS build profile enabled, the Mac adapter uses
+the login Keychain for a bundle-scoped unlock secret and control key. The control file
+is AES-GCM authenticated and atomically replaced. Restoration keeps plaintext in a
+private staging directory until its inventory matches the authenticated snapshot.
+Publication is an exclusive rename, and an interrupted restore can retry without
+overwriting a published copy. The Mac adapter supports WNFS and local recipient keys.
+With `AWAI_DRIVE_AWAI_LINK=1`, the Mac uses the existing Awai Passkey
+link and a separate Keychain P-256 signing key. The app verifies the signature
+that binds the local WNFS recipient fingerprint to the linked account. The
+signed remote-share flow and external restore acceptance remain tracked in
+AWAI-3557 and AWAI-3401.
+The Apple bundle ID `network.awai.drive` has its own storage and Keychain scope.
+The Swift AwaiDrive.app (`com.kotoba.awaivol.drive`) can remain installed.
 
 ```sh
 npm ci && npm run build
 (cd src-tauri && cargo test --lib)
 npx tauri build --no-bundle   # binary: src-tauri/target/release/awai-drive
 ```
+
+### Restore points on macOS and Android
+
+The device and restore screens follow the
+[AWAI-3557 design](https://www.figma.com/design/umqCqP5KSjLWh9fhCI1HaN?node-id=358-237).
+Mac opens the fixed Awai Passkey site after the account relay request is
+approved and ready to receive a response. Android requests the device-key
+proof from a compatible, same-publisher Awai Home. Drive verifies the signed
+proof before showing the account and key as verified.
+
+In Files, open Cloud Restore and select the locally saved head or paste a
+recipient-specific v1 grant. Two recipients can use different grants for the
+same snapshot basis. Downloads use separate broker approvals, with the HTTP
+cache disabled by the canonical broker. After interruption, choose Resume to
+fetch and verify the snapshot again. The app stores only the pending restore
+reference. A successful restore is published as a new folder. The displayed
+elapsed time includes approval dialogs.
+
+The configured pack endpoint must allow the exact WebView origin
+(`tauri://localhost` on macOS, `http://tauri.localhost` on Android).
+The v1 grant flow uses direct delivery from a known sender. Account-scoped
+head discovery and storage-backed current authorization still require the
+published authority. In the absence of that authority, a failed restore
+shows a generic error. The design's revocation message requires a verified
+revocation decision.

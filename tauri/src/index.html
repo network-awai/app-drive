@@ -38,17 +38,67 @@
   <button type="button" class="secondary" id="search-local" data-i18n="search.local">この端末を検索</button>
 </div>
 <button type="button" class="secondary" id="clear-kind" data-i18n="search.clearKind" hidden>種類フィルタを外す</button>
-<section class="actions" aria-label="ファイル操作" data-i18n-aria="actions.label"><button id="import" data-i18n="file.import">ファイルを追加</button><button id="folder" class="tonal" data-i18n="folder.create">フォルダを作成</button><button id="note" class="tonal" data-i18n="file.note">テキストを保存</button><button id="refresh" class="secondary" data-i18n="action.refresh">更新</button></section><p id="status" role="status" data-i18n="status.loading">読み込んでいます…</p><nav aria-label="フォルダ" data-i18n-aria="folder.nav"><button id="back" class="secondary" hidden data-i18n="folder.up">上のフォルダへ</button><span id="path">この端末</span></nav><h2 id="search-heading" hidden></h2><p id="search-cloud-help" hidden data-i18n="search.cloud.help">保存済みスナップショットの結果です。ファイルを開くにはクラウドから復旧してください。</p><ul id="files" tabindex="-1"></ul><div id="device-panel"><section id="drive-account" class="drive-account" aria-labelledby="account-title" hidden>
-  <img src="icons/lock.svg" alt="" class="account-lock"><h2 id="account-title" data-i18n="account.title">Awai アカウント</h2>
-  <p class="account-intro" data-i18n="account.intro"></p><p id="account-status" role="status"></p>
-  <button id="account-begin" type="button" class="secondary" data-i18n="account.start">既存の Passkey で端末を認可</button>
+<section class="actions" aria-label="ファイル操作" data-i18n-aria="actions.label"><button id="import" data-i18n="file.import">ファイルを追加</button><button id="folder" class="tonal" data-i18n="folder.create">フォルダを作成</button><button id="note" class="tonal" data-i18n="file.note">テキストを保存</button><button id="refresh" class="secondary" data-i18n="action.refresh">更新</button></section><p id="status" role="status" data-i18n="status.loading">読み込んでいます…</p><nav aria-label="フォルダ" data-i18n-aria="folder.nav"><button id="back" class="secondary" hidden data-i18n="folder.up">上のフォルダへ</button><span id="path">この端末</span></nav><h2 id="search-heading" hidden></h2><p id="search-cloud-help" hidden data-i18n="search.cloud.help">保存済みスナップショットの結果です。ファイルを開くにはクラウドから復旧してください。</p><ul id="files" tabindex="-1"></ul><div id="device-panel"><section id="drive-account" class="drive-flow" aria-labelledby="account-title" hidden>
+  <h2 id="account-title" tabindex="-1"></h2>
+  <p id="account-intro" class="flow-intro"></p>
+  <div id="account-summary" class="flow-card">
+    <strong data-i18n="account.device">この端末</strong>
+    <dl>
+      <dt data-i18n="nav.devices">端末</dt><dd id="account-device"></dd>
+      <dt data-i18n="account.title">Awai アカウント</dt><dd id="account-identity"></dd>
+      <dt data-i18n="account.publicKey">復元用公開鍵</dt><dd id="account-key"></dd>
+    </dl>
+  </div>
   <div id="account-request" hidden>
-    <p id="account-instructions" data-i18n="account.instructions">Passkey を登録したブラウザでこの URL を開き、確認コードが一致することを確認してください。</p>
-    <p id="account-code"></p>
-    <label for="account-url" data-i18n="account.url">承認ページの URL</label>
-    <input id="account-url" type="url" readonly aria-describedby="account-instructions account-code">
-    <button id="account-receive" type="button" class="tonal" data-i18n="account.receive">承認を受け取る</button>
-    <button id="account-cancel" type="button" class="secondary" data-i18n="action.cancel">キャンセル</button>
+    <div class="flow-card account-code-card">
+      <strong data-i18n="account.codeLabel">確認コード</strong>
+      <span id="account-code"></span><time id="account-expiration"></time>
+    </div>
+    <p class="flow-note" data-i18n="account.browserHelp">確認先 awai.network</p>
+    <details id="account-manual" hidden>
+      <summary data-i18n="account.browserFallback"></summary>
+      <label for="account-url" data-i18n="account.url"></label>
+      <input id="account-url" type="url" readonly>
+    </details>
+  </div>
+  <p id="account-status" role="status"></p>
+  <div class="flow-actions">
+    <button id="account-begin" type="button"></button>
+    <button id="account-receive" type="button" data-i18n="account.openBrowser" hidden></button>
+    <button id="account-cancel" type="button" class="secondary" data-i18n="account.cancelLink" hidden></button>
+    <button id="account-restore" type="button" data-i18n="sync.restore" hidden></button>
   </div>
 </section>
-<section class="actions"><button id="sync" data-i18n="sync.action">暗号化して同期</button><button id="restore" class="tonal" data-i18n="sync.restore">クラウドから復旧</button><button id="restore-legacy" class="tonal" hidden data-i18n="sync.restoreLegacy">以前の形式から復旧</button><button id="evict" class="secondary" data-i18n="sync.evict">空き容量を増やす</button></section><details><summary data-i18n="storage.about">保存先について</summary><p data-i18n="storage.warning">ファイルはこのアプリ内に保存します。AwaiFS・ほかの端末への同期は未接続です。アプリの削除・Live OS の再起動では失われる場合があります。</p></details></div></main></div><dialog id="edit"><form id="entry"><h2 id="title" data-i18n="folder.create">フォルダを作成</h2><label><span data-i18n="field.name">名前</span><input id="name" maxlength="160" required autocomplete="off"></label><label id="content-label" hidden><span data-i18n="field.content">内容</span><textarea id="content" maxlength="65536"></textarea></label><p id="form-error" role="status"></p><button id="save" type="submit" data-i18n="action.save">保存</button><button id="cancel" type="button" data-i18n="action.cancel">キャンセル</button></form></dialog><dialog id="evict-confirm" aria-labelledby="evict-title"><h2 id="evict-title" data-i18n="sync.confirm">同期済みの端末内コピーを削除しますか？</h2><p data-i18n="sync.confirm-body">未同期の変更がある場合は削除しません。再取得には接続が必要です。</p><button id="evict-cancel" autofocus data-i18n="action.cancel">キャンセル</button><button id="evict-allow" data-i18n="sync.evict">空き容量を増やす</button></dialog><script type="module" src="app.js"></script></body></html>
+</div><div id="file-sync"><section class="actions"><button id="sync" data-i18n="sync.action">暗号化して同期</button><button id="restore" class="tonal" data-i18n="sync.restore">クラウドから復旧</button><button id="restore-legacy" class="tonal" hidden data-i18n="sync.restoreLegacy">以前の形式から復旧</button><button id="evict" class="secondary" data-i18n="sync.evict">空き容量を増やす</button></section><details><summary data-i18n="storage.about">保存先について</summary><p data-i18n="storage.warning">ファイルはこのアプリ内に保存します。AwaiFS・ほかの端末への同期は未接続です。アプリの削除・Live OS の再起動では失われる場合があります。</p></details></div><section id="cloud-restore" class="drive-flow" aria-labelledby="restore-title" hidden>
+  <h2 id="restore-title" tabindex="-1"></h2>
+  <p id="restore-intro" class="flow-intro"></p>
+  <div id="restore-card" class="flow-card" hidden>
+    <div class="restore-point">
+      <img src="icons/cloud.svg" alt="" width="22" height="22">
+      <div><strong id="restore-name"></strong><p id="restore-point-id" class="flow-note"></p><p id="restore-point-details" class="flow-note" hidden></p></div>
+    </div>
+    <div id="restore-progress" hidden>
+      <label for="restore-bar" id="restore-stage"></label>
+      <progress id="restore-bar" max="3"></progress>
+      <ol class="restore-stages">
+        <li data-stage="fetch" data-i18n="restore.fetch"></li>
+        <li data-stage="verify" data-i18n="restore.verify"></li>
+        <li data-stage="publish" data-i18n="restore.publish"></li>
+      </ol>
+    </div>
+  </div>
+  <details id="restore-import">
+    <summary data-i18n="restore.addGrant"></summary>
+    <form id="restore-form">
+      <label for="restore-grant" data-i18n="restore.grant"></label>
+      <textarea id="restore-grant" maxlength="16384" required spellcheck="false" autocomplete="off"></textarea>
+      <button type="submit" class="secondary" data-i18n="restore.addPoint"></button>
+    </form>
+  </details>
+  <p id="restore-status" role="status"></p>
+  <div class="flow-actions">
+    <button id="restore-primary" type="button" hidden></button>
+    <button id="restore-secondary" type="button" class="secondary" hidden></button>
+  </div>
+</section>
+</main></div><dialog id="edit"><form id="entry"><h2 id="title" data-i18n="folder.create">フォルダを作成</h2><label><span data-i18n="field.name">名前</span><input id="name" maxlength="160" required autocomplete="off"></label><label id="content-label" hidden><span data-i18n="field.content">内容</span><textarea id="content" maxlength="65536"></textarea></label><p id="form-error" role="status"></p><button id="save" type="submit" data-i18n="action.save">保存</button><button id="cancel" type="button" data-i18n="action.cancel">キャンセル</button></form></dialog><dialog id="evict-confirm" aria-labelledby="evict-title"><h2 id="evict-title" data-i18n="sync.confirm">同期済みの端末内コピーを削除しますか？</h2><p data-i18n="sync.confirm-body">未同期の変更がある場合は削除しません。再取得には接続が必要です。</p><button id="evict-cancel" autofocus data-i18n="action.cancel">キャンセル</button><button id="evict-allow" data-i18n="sync.evict">空き容量を増やす</button></dialog><script type="module" src="app.js"></script></body></html>
