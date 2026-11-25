@@ -63,16 +63,23 @@
   (let [rows (vec (array-seq rows))
         paths (mapv #(path-parts (.-path %)) rows)
         parents (into #{} (mapcat (fn [p] (map #(subvec p 0 %) (range 1 (count p)))) paths))
-        total (reduce + (map #(if (.-directory %) 0 (.-length (.-bytes %))) rows))]
+        total (reduce + (map #(if (.-directory %) 0 (.-length (.-bytes %))) rows))
+        sources (into {}
+                      (keep (fn [[p row]]
+                              (if (.-directory row)
+                                (when-not (contains? parents p) [p {}])
+                                [p (tree/u8-source (.-bytes row))]))
+                            (map vector paths rows)))]
+    ;; The open side walks forest rows: every kept source plus every
+    ;; synthesized parent directory. Seal must refuse anything whose forest
+    ;; would exceed the same 1,000-row cap, so a sealed snapshot is always
+    ;; openable. Explicit parent directory rows are dropped above (the tree
+    ;; builds those parents) and add no forest row.
     (when-not (and (<= 1 (count rows) 1000) (= (count paths) (count (set paths)))
-                   (<= total snapshot-limit))
+                   (<= total snapshot-limit)
+                   (<= (+ (count sources) (count parents)) 1000))
       (refuse))
-    (into {}
-          (keep (fn [[p row]]
-                  (if (.-directory row)
-                    (when-not (contains? parents p) [p {}])
-                    [p (tree/u8-source (.-bytes row))]))
-                (map vector paths rows)))))
+    sources))
 
 (defn- encode-pack [header sections size]
   (let [out (js/Uint8Array. size)]
@@ -270,6 +277,9 @@
                      rows (array)
                      total (atom 0)]
                  (letfn [(visit [ref path depth]
+                           ;; Forest-row cap, mirroring the seal side in
+                           ;; tree-sources: at most 1,000 rows, parent
+                           ;; directories included.
                            (when (or (> depth 16) (>= (.-length rows) 1000)) (refuse))
                            (let [{:keys [kind body] :as entry} (node/load-node store loaded ref)]
                              (case kind

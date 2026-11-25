@@ -27,7 +27,9 @@ network-awai/awai-fs Git checkout containing the pinned revision. The build
 checks each upstream file hash. WNFS source and compiled WNFS bundles stay
 outside Git. Each
 pack stays within the existing 12 MiB transport cap. This browser profile
-admits 32 MiB of plaintext and 1,000 paths per snapshot. Its worker holds
+admits 32 MiB of plaintext and 1,000 forest rows per snapshot — files plus
+every directory, including parent directories synthesized when sealing, so
+seal refuses anything open would refuse. Its worker holds
 bounded arrays while the streaming large-snapshot path is developed.
 
 A WNFS endpoint must admit and verify both BLAKE3 WNFS blocks and SHA-256
