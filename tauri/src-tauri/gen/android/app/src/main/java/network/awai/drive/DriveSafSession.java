@@ -47,8 +47,12 @@ final class DriveSafSession {
    return;
   }
   try{
-   t.ensure();
-   if(t.children().length>0)throw new IOException("foreign-directory-refused");
+   try{
+    t.locate();
+    if(t.children().length>0)throw new IOException("foreign-directory-refused");
+   }catch(IOException e){
+    if(!"cache-absent".equals(e.getMessage()))throw e;
+   }
    String instanceId=DriveSafRecord.newInstanceId();
    DriveSaf.adopt(t,instanceId);
    try{save(next,instanceId);}
@@ -78,7 +82,7 @@ final class DriveSafSession {
  }
  private DriveSafDocuments open(DriveSafRecord.Record r)throws IOException{
   DriveSafDocuments t=new DriveSafDocuments(context.getContentResolver(),Uri.parse(r.tree));
-  t.ensure();
+  t.locate();
   return t;
  }
  /** Health probe: never claims verified content. "ready" means the tree is

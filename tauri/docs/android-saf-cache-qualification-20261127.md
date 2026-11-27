@@ -20,10 +20,17 @@ context: [drive-host-ipc.md](drive-host-ipc.md) §7,
   non-empty foreign directory rejects `foreign-directory-refused` with zero
   writes/deletes and releases the rejected grant while leaving any prior
   selection intact.
-- **`SAF-OWN-01` (dedicated subdirectory confinement):** `DriveSafDocuments`
-  confines all cache I/O strictly to `<picked>/cache/` by document id. Zero
-  files are written or deleted at `<picked>` root; a non-directory entry named
-  `cache` at `<picked>` root fails closed with `foreign-directory-refused`.
+- **`SAF-OWN-01` (dedicated subdirectory confinement & non-mutating `locate()`):**
+  `DriveSafDocuments` confines all cache I/O strictly to `<picked>/cache/` by
+  document id. `DriveSaf.Tree.locate()` locates an existing `<picked>/cache/`
+  directory without creating it (`cache-absent` if missing,
+  `foreign-directory-refused` if `<picked>/cache` is a non-directory); only
+  `DriveSaf.adopt(...)` (`cachePick` / `DriveSafSession.remember`) invokes
+  `ensure()` to create `<picked>/cache/`. Non-adopt operations (`cacheStatus`,
+  `cachePut`, `cacheGet`, `cacheVerify`, `cacheClear`, `cacheRelease`) never
+  auto-create `cache/` when absent, and `DriveSafDocuments` filters out
+  directory documents on `read()`/`delete()` (`fileId` vs `hasChild`) so
+  duplicate display names cannot address a directory.
 - **`SAF-OWN-02` (ownership marker + `instanceId` dual binding):**
   `DriveSafRecord` persists `{"schema":"awai.drive.saf.v1","tree":"<uri>","appId":"network.awai.drive","instanceId":"<uuidv4>"}`
   in `noBackupFilesDir/awai-drive-saf.v1.json` and encodes/validates
@@ -85,7 +92,7 @@ Toolchains used in local verification (2026-11-28):
 | Check | Exit code | Result and coverage |
 | --- | ---: | --- |
 | `DriveSafRecordTest` (JVM) | `0` | **127 pass / 0 fail / 0 skip** (`test/DriveSafRecordTest.java`): record (`tree` + `appId` + UUIDv4 `instanceId`) and owner-marker (`.awai-cache-owner.v1.json`) encode→decode roundtrips, UUIDv4 validation, legacy `{schema,tree}` decoding with `hasOwnership()==false`, strict `invalid-saf-record` / `foreign-directory-refused` rejection of malformed/duplicate-key/wrong-schema/wrong-appId/wrong-cacheVersion/oversize/non-`content://` inputs |
-| `DriveSafTest` (JVM) | `0` | **438 pass / 0 fail / 0 skip** (`test/DriveSafTest.java`): `SAF-OWN-01` `<picked>/cache/` confinement (zero files at `<picked>` root), `SAF-OWN-02` empty `cache/` adoption + read-back verification, non-empty foreign `cache/` refusal (64-hex + `.pending-*.part` without marker, malformed marker, wrong `schema`/`appId`/`cacheVersion`, mismatched `instanceId`, legacy/missing local `instanceId`, dir/symlink marker) with zero creates/deletes, `SAF-OWN-03` double-gated `clearDetailed` preserving `.awai-cache-owner.v1.json`, foreign files, subdirs, and symlinks, explicit `release` teardown, transient `IOException` (`storage-unavailable` + mid-stream) preservation on BOTH `put` and `verify` (plus `inspect` and `get`) with zero deletes, mixed `verify` deleting only confirmed-corrupt blobs, confirmed corrupt/truncated/oversize detection + `rebuilt` replacement, staging cleanup on mid-write failure, `permission-lost`/`cache-absent` typed errors leaving sibling internal store byte-identical, entry/byte ceilings, `isUserDocument` hiding marker & staging |
+| `DriveSafTest` (JVM) | `0` | **503 pass / 0 fail / 0 skip** (`test/DriveSafTest.java`): `SAF-OWN-01` `<picked>/cache/` confinement (zero files at `<picked>` root, `locate()` vs `ensure()` non-mutating `cache-absent` when `cache/` is absent or externally removed, `foreign-directory-refused` with zero mutations when `<picked>/cache` is a regular file), `SAF-OWN-02` empty `cache/` adoption + read-back verification, non-empty foreign `cache/` refusal (64-hex + `.pending-*.part` without marker, malformed marker, wrong `schema`/`appId`/`cacheVersion`, mismatched `instanceId`, legacy/missing local `instanceId`, dir/symlink marker) with zero creates/deletes, `SAF-OWN-03` double-gated `clearDetailed` preserving `.awai-cache-owner.v1.json`, foreign files, subdirs, and symlinks, explicit `release` teardown, transient `IOException` (`storage-unavailable` + mid-stream) preservation on BOTH `put` and `verify` (plus `inspect` and `get`) with zero deletes, mixed `verify` deleting only confirmed-corrupt blobs, confirmed corrupt/truncated/oversize detection + `rebuilt` replacement, staging cleanup on mid-write failure, `permission-lost`/`cache-absent` typed errors leaving sibling internal store byte-identical, entry/byte ceilings, `isUserDocument` hiding marker & staging |
 | `DriveFilesTest` (JVM) | `0` | **30 pass / 0 fail / 0 skip** (`test/DriveFilesTest.java`): existing local store invariants plus `.awai-cache-owner.v1.json` rejected by `name()`/`resolve()` and hidden from `list()` (backing read-only `DriveDocuments`) |
 | Android Java compile-check (`javac`) | `0` | `DriveSafRecord.java`, `DriveSaf.java`, `DriveSafDocuments.java`, `DriveSafSession.java`, `DriveFiles.java`, `DriveDocuments.java` compile clean against `android-37.0/android.jar` (0 errors) |
 | `test/saf-cache.test.mjs` (Node) | `0` | **3 pass / 0 fail / 0 skip**: base64 roundtrip, op→payload mapping (including `unreadable`/`preservedForeign`/`ownerPreserved`), typed-error propagation including `foreign-directory-refused` and `storage-unavailable` |

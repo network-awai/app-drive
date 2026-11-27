@@ -37,7 +37,7 @@ final class DriveSafDocuments implements DriveSaf.Tree {
   }finally{if(c!=null)c.close();}
   return made;
  }
- public void ensure()throws IOException{
+ public void locate()throws IOException{
   if(cache!=null){
    Cursor c=null;
    try{c=resolver.query(doc(cache),new String[]{OpenableColumns.DISPLAY_NAME,DocumentsContract.Document.COLUMN_MIME_TYPE},null,null,null);}
@@ -54,24 +54,40 @@ final class DriveSafDocuments implements DriveSaf.Tree {
     throw new IOException("foreign-directory-refused");
    }
   }
+  throw new IOException("cache-absent");
+ }
+ public void ensure()throws IOException{
+  try{locate();return;}
+  catch(IOException e){if(!"cache-absent".equals(e.getMessage()))throw e;}
+  String root=DocumentsContract.getTreeDocumentId(tree);
   cache=DocumentsContract.getDocumentId(create(doc(root),DocumentsContract.Document.MIME_TYPE_DIR,DriveSaf.DIR));
  }
- private String id(String name)throws IOException{
-  ensure();
+ private boolean hasChild(String name)throws IOException{
+  locate();
   try(Cursor c=query(DocumentsContract.buildChildDocumentsUriUsingTree(tree,cache),COLS)){
-   while(c.moveToNext()){String n=c.getString(1);if(n!=null&&name.equals(n))return c.getString(0);}
+   while(c.moveToNext()){String n=c.getString(1);if(n!=null&&name.equals(n))return true;}
+  }
+  return false;
+ }
+ private String fileId(String name)throws IOException{
+  locate();
+  try(Cursor c=query(DocumentsContract.buildChildDocumentsUriUsingTree(tree,cache),COLS)){
+   while(c.moveToNext()){
+    String n=c.getString(1);
+    if(n!=null&&name.equals(n)&&!DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(2)))return c.getString(0);
+   }
   }
   return null;
  }
  public DriveSaf.Item[] children()throws IOException{
-  ensure();List<DriveSaf.Item> out=new ArrayList<>();
+  locate();List<DriveSaf.Item> out=new ArrayList<>();
   try(Cursor c=query(DocumentsContract.buildChildDocumentsUriUsingTree(tree,cache),COLS)){
    while(c.moveToNext()){String n=c.getString(1);if(n!=null)out.add(new DriveSaf.Item(n,DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(2)),c.isNull(3)?-1:c.getLong(3)));}
   }
   return out.toArray(new DriveSaf.Item[0]);
  }
  public InputStream read(String name)throws IOException{
-  String i=id(name);if(i==null)throw new IOException("blob-absent");
+  String i=fileId(name);if(i==null)throw new IOException("blob-absent");
   InputStream in;
   try{in=resolver.openInputStream(doc(i));}
   catch(SecurityException e){throw new IOException("permission-lost");}
@@ -80,7 +96,7 @@ final class DriveSafDocuments implements DriveSaf.Tree {
   return in;
  }
  public void create(String name,byte[] data)throws IOException{
-  ensure();if(id(name)!=null)throw new IOException("file-exists");
+  locate();if(hasChild(name))throw new IOException("file-exists");
   String mime=DriveSaf.ownerFile(name)?"application/json":"application/octet-stream";
   Uri made=create(doc(cache),mime,name);
   try(OutputStream out=resolver.openOutputStream(made)){
@@ -90,7 +106,7 @@ final class DriveSafDocuments implements DriveSaf.Tree {
   catch(IOException|RuntimeException e){drop(made);throw new IOException("storage-unavailable");}
  }
  public void delete(String name)throws IOException{
-  String i=id(name);if(i==null)return;
+  String i=fileId(name);if(i==null)return;
   boolean gone;try{gone=DocumentsContract.deleteDocument(resolver,doc(i));}
   catch(SecurityException e){throw new IOException("permission-lost");}
   if(!gone)throw new IOException("storage-unavailable");

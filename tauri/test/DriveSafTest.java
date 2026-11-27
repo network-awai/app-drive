@@ -23,9 +23,18 @@ public class DriveSafTest{
    if(name==null||name.isEmpty()||name.indexOf('/')>=0||name.indexOf('\\')>=0||name.indexOf(0)>=0||name.equals("..")||name.equals("."))throw new IOException("invalid-path");
    return cache.resolve(name);
   }
-  public void ensure()throws IOException{live();Files.createDirectories(cache);}
+  public void locate()throws IOException{
+   live();
+   if(!Files.exists(cache,LinkOption.NOFOLLOW_LINKS))throw new IOException("cache-absent");
+   if(Files.isSymbolicLink(cache)||!Files.isDirectory(cache,LinkOption.NOFOLLOW_LINKS))throw new IOException("foreign-directory-refused");
+  }
+  public void ensure()throws IOException{
+   try{locate();return;}
+   catch(IOException e){if(!"cache-absent".equals(e.getMessage()))throw e;}
+   Files.createDirectories(cache);
+  }
   public DriveSaf.Item[] children()throws IOException{
-   live();List<DriveSaf.Item> out=new ArrayList<>();
+   locate();List<DriveSaf.Item> out=new ArrayList<>();
    try(DirectoryStream<Path> ds=Files.newDirectoryStream(cache)){
     for(Path p:ds){
      boolean sym=Files.isSymbolicLink(p);
@@ -37,7 +46,7 @@ public class DriveSafTest{
    return out.toArray(new DriveSaf.Item[0]);
   }
   public InputStream read(String name)throws IOException{
-   live();
+   locate();
    if(name.equals(failRead))throw new IOException(failReadError);
    Path f=file(name);
    if(Files.isSymbolicLink(f)||!Files.isRegularFile(f,LinkOption.NOFOLLOW_LINKS))throw new IOException("blob-absent");
@@ -56,13 +65,27 @@ public class DriveSafTest{
    return Files.newInputStream(f);
   }
   public void create(String name,byte[] data)throws IOException{
-   live();createCalls.add(name);
+   locate();createCalls.add(name);
    if(name.equals(failCreate))throw new IOException("storage-unavailable");
    Path f=file(name);
    try{Files.write(f,data,StandardOpenOption.CREATE_NEW);}catch(FileAlreadyExistsException e){throw new IOException("file-exists");}
   }
-  public void delete(String name)throws IOException{live();deleteCalls.add(name);Files.deleteIfExists(file(name));}
+  public void delete(String name)throws IOException{locate();deleteCalls.add(name);Files.deleteIfExists(file(name));}
   void raw(String name,byte[] data)throws IOException{Files.createDirectories(cache);Files.write(cache.resolve(name),data);}
+ }
+ static void assertAbsentZeroMutation(Fake f,String id,String h,byte[] blob)throws Exception{
+  f.resetCalls();
+  eq(code(()->DriveSaf.inspect(f,id,false)),"cache-absent");
+  eq(code(()->DriveSaf.inspect(f,id,true)),"cache-absent");
+  eq(code(()->DriveSaf.verify(f,id)),"cache-absent");
+  eq(code(()->DriveSaf.put(f,id,h,blob)),"cache-absent");
+  eq(code(()->DriveSaf.get(f,id,h)),"cache-absent");
+  eq(code(()->DriveSaf.clear(f,id)),"cache-absent");
+  eq(code(()->DriveSaf.clearDetailed(f,id)),"cache-absent");
+  eq(code(()->DriveSaf.release(f,id)),"cache-absent");
+  eq(f.createCalls.size(),0);
+  eq(f.deleteCalls.size(),0);
+  yes(!Files.exists(f.cache,LinkOption.NOFOLLOW_LINKS));
  }
  static void assertAllRefusedZeroMutation(Fake f,String id,String h,byte[] blob)throws Exception{
   f.resetCalls();
@@ -86,19 +109,38 @@ public class DriveSafTest{
   String otherId=DriveSafRecord.newInstanceId();
   while(otherId.equals(id))otherId=DriveSafRecord.newInstanceId();
 
-  // --- SAF-OWN-02: Empty cache/ adoption creates & read-back verifies marker ---
+  // --- SAF-OWN-01/02: Non-adopt ops NEVER auto-create cache/; only adopt creates cache/ and marker ---
   Fake f=new Fake(base,"picked");
-  // Before adoption (no marker), cache operations fail closed.
-  eq(code(()->DriveSaf.put(f,id,h,blob)),"foreign-directory-refused");
-  eq(code(()->DriveSaf.clear(f,id)),"foreign-directory-refused");
-  // Empty cache/ adoption succeeds, writes .awai-cache-owner.v1.json, and touches nothing at <picked> root except cache/.
+  // Before adoption (cache/ does not exist): all non-adopt ops throw cache-absent with ZERO writes/deletes and cache/ stays absent.
+  assertAbsentZeroMutation(f,id,h,blob);
+  // If <picked>/cache is a regular file (not a directory), adopt and all ops fail closed with foreign-directory-refused and ZERO mutations.
+  Fake fileCache=new Fake(base,"cache-is-file");
+  Files.writeString(fileCache.cache,"user-file");
+  assertAllRefusedZeroMutation(fileCache,id,h,blob);
+  yes(Files.isRegularFile(fileCache.cache,LinkOption.NOFOLLOW_LINKS));
+  eq(Files.readString(fileCache.cache),"user-file");
+  // If an empty cache/ already exists without marker, non-adopt ops fail closed with foreign-directory-refused.
+  Fake emptyUnadopted=new Fake(base,"empty-unadopted");
+  Files.createDirectories(emptyUnadopted.cache);
+  eq(code(()->DriveSaf.put(emptyUnadopted,id,h,blob)),"foreign-directory-refused");
+  eq(code(()->DriveSaf.clear(emptyUnadopted,id)),"foreign-directory-refused");
+  eq(emptyUnadopted.createCalls.size(),0);eq(emptyUnadopted.deleteCalls.size(),0);
+  // Only adopt creates cache/ and .awai-cache-owner.v1.json, touching nothing else at <picked> root.
+  yes(!Files.exists(f.cache,LinkOption.NOFOLLOW_LINKS));
   DriveSaf.adopt(f,id);
+  yes(Files.isDirectory(f.cache,LinkOption.NOFOLLOW_LINKS));
   yes(Files.isRegularFile(f.cache.resolve(DriveSaf.OWNER_FILE)));
   eq(DriveSafRecord.decodeOwner(Files.readAllBytes(f.cache.resolve(DriveSaf.OWNER_FILE))),id);
   try(var rootKids=Files.list(f.tree)){
    List<String> rootNames=rootKids.map(p->p.getFileName().toString()).toList();
    eq(rootNames,List.of(DriveSaf.DIR)); // SAF-OWN-01: zero files at <picked> root
   }
+  // External removal of cache/ on an adopted tree: non-adopt ops return cache-absent and do NOT recreate cache/.
+  Fake removedCache=new Fake(base,"removed-cache");
+  DriveSaf.adopt(removedCache,id);
+  eq(DriveSaf.put(removedCache,id,h,blob),"stored");
+  deleteTree(removedCache.cache);
+  assertAbsentZeroMutation(removedCache,id,h,blob);
   // Re-adopting an already-owned directory with the same instanceId is idempotent with zero writes.
   f.resetCalls();DriveSaf.adopt(f,id);eq(f.createCalls.size(),0);eq(f.deleteCalls.size(),0);
   // Adopted cache allows put/get/verify/clear.

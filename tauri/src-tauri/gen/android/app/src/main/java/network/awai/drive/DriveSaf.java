@@ -21,7 +21,8 @@ public final class DriveSaf {
   STAGE=Pattern.compile("\\.pending-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.part");
  private static final class Corrupt extends IOException{Corrupt(){super("cache-corrupt");}}
  public interface Tree{
-  void ensure()throws IOException;                          // locate/create cache/
+  void locate()throws IOException;                          // locate existing cache/ without creating it
+  void ensure()throws IOException;                          // locate/create cache/ (adopt only)
   Item[] children()throws IOException;                     // direct children of cache/
   InputStream read(String name)throws IOException;          // open one entry
   void create(String name,byte[] data)throws IOException;   // exclusive create+write
@@ -131,7 +132,7 @@ public final class DriveSaf {
  }
  private static Report scan(Tree t,String instanceId,boolean checkDigests,boolean deleteCorrupt)throws IOException{
   if(!DriveSafRecord.validUuidV4(instanceId))throw new IOException("foreign-directory-refused");
-  t.ensure();Item[] kids=t.children();
+  t.locate();Item[] kids=t.children();
   verifyOwner(t,kids,instanceId);
   Report r=new Report();
   for(Item it:kids){
@@ -191,7 +192,7 @@ public final class DriveSaf {
   if(data==null||data.length>MAX_BLOB_BYTES)throw new IOException("file-too-large");
   if(!declared.equals(digest(data)))throw new IOException("sha-mismatch");
   if(!DriveSafRecord.validUuidV4(instanceId))throw new IOException("foreign-directory-refused");
-  t.ensure();Item[] kids=t.children();
+  t.locate();Item[] kids=t.children();
   verifyOwner(t,kids,instanceId);
   int count=0;long bytes=0;Item existing=null;
   for(Item it:kids){
@@ -229,7 +230,7 @@ public final class DriveSaf {
  public static byte[] get(Tree t,String instanceId,String sha)throws IOException{
   if(!blobName(sha))throw new IOException("invalid-name");
   if(!DriveSafRecord.validUuidV4(instanceId))throw new IOException("foreign-directory-refused");
-  t.ensure();Item[] kids=t.children();
+  t.locate();Item[] kids=t.children();
   verifyOwner(t,kids,instanceId);
   for(Item it:kids)if(it.name.equals(sha)){
    if(!it.regularFile())throw new IOException("cache-corrupt");
@@ -247,7 +248,7 @@ public final class DriveSaf {
   *  .awai-cache-owner.v1.json, foreign files, subdirectories, or symlinks. */
  public static ClearReport clearDetailed(Tree t,String instanceId)throws IOException{
   if(!DriveSafRecord.validUuidV4(instanceId))throw new IOException("foreign-directory-refused");
-  t.ensure();Item[] kids=t.children();
+  t.locate();Item[] kids=t.children();
   verifyOwner(t,kids,instanceId);
   ClearReport cr=new ClearReport();
   for(Item it:kids){
