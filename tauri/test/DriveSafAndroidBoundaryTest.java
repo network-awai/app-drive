@@ -24,7 +24,10 @@ import java.util.concurrent.Callable;
  *  Verifies AWAI-SPEC-REG-SAF-B1-v0.2 §2.3:
  *  1) Stage 1 DriveSafSession.acceptPicked rejects disallowed authorities with
  *     "local-provider-required" and takePersistableUriPermission calls == 0,
- *     while accepting com.android.externalstorage.documents.
+ *     enforces Android's strict READ|WRITE modeFlags contract on
+ *     takePersistableUriPermission / releasePersistableUriPermission, rejects
+ *     missing READ/WRITE or SecurityException with "persist-unsupported", and
+ *     accepts com.android.externalstorage.documents.
  *  2) DriveSafDocuments rejects disallowed authorities on all 7 DriveSaf.Tree
  *     entry points with "local-provider-required" and 0 ContentResolver /
  *     DocumentsContract calls.
@@ -46,6 +49,11 @@ public class DriveSafAndroidBoundaryTest {
   checks++;
   try{f.call();throw new AssertionError("check "+checks+" accepted forbidden input");}
   catch(IOException e){return e.getMessage();}
+ }
+ static void expectIllegalArgument(Runnable r){
+  checks++;
+  try{r.run();throw new AssertionError("check "+checks+" expected IllegalArgumentException");}
+  catch(IllegalArgumentException expected){}
  }
  static String sha(byte[] b)throws Exception{
   return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(b));
@@ -101,10 +109,13 @@ public class DriveSafAndroidBoundaryTest {
   int takePersistableCalls;
   int releasePersistableCalls;
   int getPersistedCalls;
+  int lastTakeFlags;
+  int lastReleaseFlags;
 
   void resetCounts(){
    queryCalls=0;openInputStreamCalls=0;openOutputStreamCalls=0;openFileDescriptorCalls=0;
    takePersistableCalls=0;releasePersistableCalls=0;getPersistedCalls=0;
+   lastTakeFlags=0;lastReleaseFlags=0;
    DocumentsContract.resetCounts();
   }
 
@@ -194,6 +205,8 @@ public class DriveSafAndroidBoundaryTest {
 
   @Override public void takePersistableUriPermission(Uri uri,int modeFlags){
    takePersistableCalls++;
+   lastTakeFlags=modeFlags;
+   requireValidPersistableModeFlags(modeFlags);
    if(throwSecurityOnTakePersistable)throw new SecurityException("persist-denied");
    boolean r=(modeFlags&Intent.FLAG_GRANT_READ_URI_PERMISSION)!=0;
    boolean w=(modeFlags&Intent.FLAG_GRANT_WRITE_URI_PERMISSION)!=0;
@@ -202,6 +215,8 @@ public class DriveSafAndroidBoundaryTest {
 
   @Override public void releasePersistableUriPermission(Uri uri,int modeFlags){
    releasePersistableCalls++;
+   lastReleaseFlags=modeFlags;
+   requireValidPersistableModeFlags(modeFlags);
    grants.remove(uri);
   }
 
@@ -245,7 +260,8 @@ public class DriveSafAndroidBoundaryTest {
   try{
    byte[] blob1=new byte[256];new Random(11).nextBytes(blob1);String h1=sha(blob1);
    String b64Blob1=Base64.encodeToString(blob1,Base64.NO_WRAP);
-   int rwPersist=Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
+   int rwOnly=Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+   int rwPersist=rwOnly|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
 
    String[] disallowedUris={
     "content://com.android.providers.downloads.documents/tree/downloads",
@@ -287,25 +303,59 @@ public class DriveSafAndroidBoundaryTest {
     eq(resolver.takePersistableCalls,0);
     eq(DocumentsContract.totalCalls(),0);
 
-    // Allowed authority with missing write flag -> persist-unsupported, 0 takePersistable calls
+    // Direct ContentResolver contract check: Android throws IllegalArgumentException
+    // for any flag outside READ|WRITE (including FLAG_GRANT_PERSISTABLE_URI_PERMISSION) or 0.
     Uri primaryUri=Uri.parse("content://com.android.externalstorage.documents/tree/primary%3ADownload%2FAwai");
     resolver.initRoot("primary:Download/Awai");
-    resolver.resetCounts();
-    eq(code(()->{session.acceptPicked(primaryUri,Intent.FLAG_GRANT_READ_URI_PERMISSION);return null;}),"persist-unsupported");
-    eq(resolver.takePersistableCalls,0);
+    expectIllegalArgument(()->resolver.takePersistableUriPermission(primaryUri,rwPersist));
+    expectIllegalArgument(()->resolver.takePersistableUriPermission(primaryUri,0));
+    expectIllegalArgument(()->resolver.takePersistableUriPermission(primaryUri,Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION));
+    expectIllegalArgument(()->resolver.releasePersistableUriPermission(primaryUri,rwPersist));
+    expectIllegalArgument(()->resolver.releasePersistableUriPermission(primaryUri,0));
+    yes(resolver.grants.isEmpty());
+
+    // Allowed authority with missing READ or WRITE flag -> persist-unsupported, 0 takePersistable calls
+    int[] incompleteFlags={
+     0,
+     Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
+     Intent.FLAG_GRANT_READ_URI_PERMISSION,
+     Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
+     Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+     Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+    };
+    for(int badFlags:incompleteFlags){
+     resolver.resetCounts();
+     eq(code(()->{session.acceptPicked(primaryUri,badFlags);return null;}),"persist-unsupported");
+     eq(resolver.takePersistableCalls,0);
+     eq(resolver.totalResolverIoCalls(),0);
+     eq(DocumentsContract.buildDocumentUriCalls,0);
+     eq(DocumentsContract.buildChildDocumentsUriCalls,0);
+     eq(DocumentsContract.createDocumentCalls,0);
+     eq(DocumentsContract.deleteDocumentCalls,0);
+     yes(!new File(nbDir,"awai-drive-saf.v1.json").exists());
+    }
 
     // Allowed authority when takePersistableUriPermission throws SecurityException -> persist-unsupported
     resolver.throwSecurityOnTakePersistable=true;
     resolver.resetCounts();
     eq(code(()->{session.acceptPicked(primaryUri,rwPersist);return null;}),"persist-unsupported");
     eq(resolver.takePersistableCalls,1);
+    eq(resolver.lastTakeFlags,rwOnly);
+    eq(resolver.lastTakeFlags&Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,0);
+    eq(resolver.totalResolverIoCalls(),0);
+    eq(DocumentsContract.buildDocumentUriCalls,0);
+    eq(DocumentsContract.buildChildDocumentsUriCalls,0);
+    eq(DocumentsContract.createDocumentCalls,0);
+    eq(DocumentsContract.deleteDocumentCalls,0);
     yes(!new File(nbDir,"awai-drive-saf.v1.json").exists());
     resolver.throwSecurityOnTakePersistable=false;
 
-    // Positive: acceptPicked on com.android.externalstorage.documents (primary:)
+    // Positive: acceptPicked on com.android.externalstorage.documents (primary:) passes ONLY READ|WRITE
     resolver.resetCounts();
     session.acceptPicked(primaryUri,rwPersist);
     eq(resolver.takePersistableCalls,1);
+    eq(resolver.lastTakeFlags,rwOnly);
+    eq(resolver.lastTakeFlags&Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,0);
     yes(new File(nbDir,"awai-drive-saf.v1.json").exists());
     JSONObject st=session.status();
     eq(st.getBoolean("picked"),true);
@@ -325,14 +375,19 @@ public class DriveSafAndroidBoundaryTest {
     eq(clrRes.getBoolean("ownerPreserved"),true);
     JSONObject relRes=session.execute(new JSONObject().put("op","cacheRelease"));
     eq(relRes.getBoolean("released"),true);
+    eq(resolver.releasePersistableCalls,1);
+    eq(resolver.lastReleaseFlags,rwOnly);
+    eq(resolver.lastReleaseFlags&Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,0);
     yes(!new File(nbDir,"awai-drive-saf.v1.json").exists());
 
-    // Positive: removable volume XXXX-XXXX: also accepted
+    // Positive: removable volume XXXX-XXXX: also accepted with READ|WRITE modeFlags only
     Uri removableUri=Uri.parse("content://com.android.externalstorage.documents/tree/1234-5678%3AAwaiCache");
     resolver.initRoot("1234-5678:AwaiCache");
     resolver.resetCounts();
     session.acceptPicked(removableUri,rwPersist);
     eq(resolver.takePersistableCalls,1);
+    eq(resolver.lastTakeFlags,rwOnly);
+    eq(resolver.lastTakeFlags&Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,0);
     eq(session.status().getString("state"),"ready");
    }
 
@@ -418,6 +473,7 @@ public class DriveSafAndroidBoundaryTest {
      eq(rel.getBoolean("released"),true);
      yes(!recFile.exists());
      eq(resolver.releasePersistableCalls,1);
+     eq(resolver.lastReleaseFlags,rwOnly);
      eq(resolver.totalResolverIoCalls(),0);
      eq(DocumentsContract.deleteDocumentCalls,0);
      eq(DocumentsContract.totalCalls(),0);
@@ -501,7 +557,7 @@ public class DriveSafAndroidBoundaryTest {
     yes(src.contains("Os.fstat"));
    }
 
-   System.out.println("DriveSafAndroidBoundaryTest: "+checks+" checks passed: Stage 1 acceptPicked allowlist, DriveSafDocuments zero-call rejection, Stage 2 tampered-record fail-closed + safe cacheRelease, confirmRegularFile S_ISREG/st_size/null-PFD/SecurityException, Honest Non-Goal disclosure.");
+   System.out.println("DriveSafAndroidBoundaryTest: "+checks+" checks passed: Stage 1 acceptPicked allowlist + strict READ|WRITE persistable modeFlags, DriveSafDocuments zero-call rejection, Stage 2 tampered-record fail-closed + safe cacheRelease, confirmRegularFile S_ISREG/st_size/null-PFD/SecurityException, Honest Non-Goal disclosure.");
   }finally{
    deleteTree(tmp);
   }

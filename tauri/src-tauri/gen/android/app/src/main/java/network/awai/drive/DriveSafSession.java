@@ -33,7 +33,7 @@ final class DriveSafSession {
  void acceptPicked(Uri uri,int intentFlags)throws Exception{
   validateTreeUri(uri);
   if((intentFlags&GRANTS)!=GRANTS)throw new IOException("persist-unsupported");
-  int flags=intentFlags&(GRANTS|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+  int flags=intentFlags&GRANTS;
   try{context.getContentResolver().takePersistableUriPermission(uri,flags);}
   catch(SecurityException e){throw new IOException("persist-unsupported");}
   remember(uri);
