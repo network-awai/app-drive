@@ -9,10 +9,11 @@ import java.util.*;
 public final class DriveFiles {
  public static final long MAX_BYTES=1073741824L, RESERVE=64L*1024*1024;
  public static final int BUFFER=65536, MAX_ENTRIES=1000;
+ private static final String SAF_OWNER_MARKER=".awai-cache-owner.v1.json";
  private final File root;
  public DriveFiles(File base)throws IOException{Files.createDirectories(base.toPath());root=base.getCanonicalFile();}
  public static String name(String n)throws IOException{
-  if(n==null||n.trim().isEmpty()||n.length()>160||n.equals(".")||n.equals("..")||n.startsWith(".pending-")||n.matches(".*[/\\\\\\x00-\\x1f\\x7f].*"))throw new IOException("invalid-name");
+  if(n==null||n.trim().isEmpty()||n.length()>160||n.equals(".")||n.equals("..")||n.startsWith(".pending-")||SAF_OWNER_MARKER.equals(n)||n.matches(".*[/\\\\\\x00-\\x1f\\x7f].*"))throw new IOException("invalid-name");
   return Normalizer.normalize(n,Normalizer.Form.NFC);
  }
  public File resolve(String rel)throws IOException{
@@ -24,7 +25,7 @@ public final class DriveFiles {
  public String path(File f)throws IOException{return root.toPath().relativize(f.getCanonicalFile().toPath()).toString().replace(File.separatorChar,'/');}
  private File directory(String p)throws IOException{File f=resolve(p);if(!f.isDirectory())throw new IOException("invalid-path");return f;}
  public synchronized File[] list(String p)throws IOException{
-  File[] files=directory(p).listFiles(f->!f.getName().startsWith(".pending-"));if(files==null)throw new IOException("storage-unavailable");if(files.length>MAX_ENTRIES)throw new IOException("entry-limit");
+  File[] files=directory(p).listFiles(f->!f.getName().startsWith(".pending-")&&!SAF_OWNER_MARKER.equals(f.getName()));if(files==null)throw new IOException("storage-unavailable");if(files.length>MAX_ENTRIES)throw new IOException("entry-limit");
   for(File f:files){if(Files.isSymbolicLink(f.toPath()))throw new IOException("invalid-path");resolve(path(f));}Arrays.sort(files,Comparator.comparing(File::isFile).thenComparing(File::getName));return files;
  }
  private File child(String parent,String n)throws IOException{directory(parent);String rel=parent.isEmpty()?name(n):parent+"/"+name(n);return resolve(rel);}

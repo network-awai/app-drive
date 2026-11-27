@@ -9,3 +9,4 @@ src-tauri/gen/android/app/src/debug/
 # Contains compiled WNFS implementation from the authorized apex checkout.
 generated/wnfs-core.js
 src-tauri/target/
+.agent-output/
