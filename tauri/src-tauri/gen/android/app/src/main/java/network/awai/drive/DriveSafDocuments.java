@@ -2,113 +2,136 @@ package network.awai.drive;
 import android.content.*;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
+import android.system.Os;
+import android.system.OsConstants;
+import android.system.StructStat;
 import java.io.*;
 import java.util.*;
-/** DocumentsContract adapter for DriveSaf.Tree (SAF-OWN-01). Every call stays
- *  inside the "cache" document of the user-picked SAF tree; document ids, never
- *  display names, address entries, and zero files are written or deleted at the
- *  picked root. This is an internal DocumentsContract client, not an exported
- *  DocumentsProvider; read-only user document projection lives in DriveDocuments
- *  and excludes .awai-cache-owner.v1.json and .pending-* staging files. */
-final class DriveSafDocuments implements DriveSaf.Tree {
- private static final String[] COLS={DocumentsContract.Document.COLUMN_DOCUMENT_ID,OpenableColumns.DISPLAY_NAME,DocumentsContract.Document.COLUMN_MIME_TYPE,OpenableColumns.SIZE};
- private final ContentResolver resolver;private final Uri tree;private String cache;
- DriveSafDocuments(ContentResolver r,Uri tree){resolver=r;this.tree=tree;}
+/** Thin Android ContentResolver / DocumentsContract bridge implementing
+ *  DriveSafSafAdapter.Provider and delegating all DriveSaf.Tree operations to
+ *  DriveSafSafAdapter (SAF-OWN-01..03). Queries 5 columns including
+ *  COLUMN_FLAGS and confirms regular files via Os.fstat(S_ISREG) + size check. */
+final class DriveSafDocuments implements DriveSaf.Tree, DriveSafSafAdapter.Provider {
+ private static final String[] COLS={
+  DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+  OpenableColumns.DISPLAY_NAME,
+  DocumentsContract.Document.COLUMN_MIME_TYPE,
+  OpenableColumns.SIZE,
+  DocumentsContract.Document.COLUMN_FLAGS
+ };
+ private final ContentResolver resolver;
+ private final Uri tree;
+ private final DriveSafSafAdapter adapter;
+
+ DriveSafDocuments(ContentResolver r,Uri tree){
+  this.resolver=r;
+  this.tree=tree;
+  this.adapter=new DriveSafSafAdapter(this);
+ }
+
  static boolean isUserDocument(String name){return DriveSaf.isUserDocument(name);}
+
  private Uri doc(String id){return DocumentsContract.buildDocumentUriUsingTree(tree,id);}
- private Cursor query(Uri uri,String[] cols)throws IOException{
-  Cursor c;try{c=resolver.query(uri,cols,null,null,null);}catch(SecurityException e){cache=null;throw new IOException("permission-lost");}
-  if(c==null){cache=null;throw new IOException("cache-absent");}return c;
+
+ private static DriveSafSafAdapter.Doc readRow(Cursor c){
+  String id=c.isNull(0)?null:c.getString(0);
+  String name=c.isNull(1)?null:c.getString(1);
+  String mime=c.isNull(2)?null:c.getString(2);
+  long size=c.isNull(3)?-1L:c.getLong(3);
+  Integer flags=c.isNull(4)?null:Integer.valueOf(c.getInt(4));
+  return new DriveSafSafAdapter.Doc(id,name,mime,size,flags);
  }
- private void drop(Uri u){try{DocumentsContract.deleteDocument(resolver,u);}catch(Exception ignore){}}
- /** Create a document and require the provider to keep the exact display name;
-  *  SAF providers auto-rename on conflicts, which would break name=digest. */
- private Uri create(Uri parent,String mime,String name)throws IOException{
-  Uri made;try{made=DocumentsContract.createDocument(resolver,parent,mime,name);}catch(SecurityException e){throw new IOException("permission-lost");}
+
+ @Override public String rootId()throws IOException{
+  String root=DocumentsContract.getTreeDocumentId(tree);
+  if(root==null||root.isEmpty())throw new IOException("cache-absent");
+  return root;
+ }
+
+ @Override public DriveSafSafAdapter.Doc queryDoc(String docId)throws IOException{
+  Cursor c;
+  try{c=resolver.query(doc(docId),COLS,null,null,null);}
+  catch(SecurityException e){throw new IOException("permission-lost");}
+  catch(IllegalArgumentException e){return null;}
+  if(c==null)return null;
+  try(Cursor closeable=c){
+   if(!closeable.moveToFirst())return null;
+   return readRow(closeable);
+  }
+ }
+
+ @Override public List<DriveSafSafAdapter.Doc> listChildren(String parentId)throws IOException{
+  Cursor c;
+  try{c=resolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(tree,parentId),COLS,null,null,null);}
+  catch(SecurityException e){throw new IOException("permission-lost");}
+  if(c==null)throw new IOException("cache-absent");
+  List<DriveSafSafAdapter.Doc> out=new ArrayList<>();
+  try(Cursor closeable=c){
+   while(closeable.moveToNext())out.add(readRow(closeable));
+  }
+  return out;
+ }
+
+ @Override public DriveSafSafAdapter.Doc createDoc(String parentId,String mime,String name)throws IOException{
+  Uri made;
+  try{made=DocumentsContract.createDocument(resolver,doc(parentId),mime,name);}
+  catch(SecurityException e){throw new IOException("permission-lost");}
+  catch(FileNotFoundException e){throw new IOException("cache-absent");}
   if(made==null)throw new IOException("cache-absent");
-  Cursor c=null;
-  try{c=resolver.query(made,new String[]{OpenableColumns.DISPLAY_NAME},null,null,null);}
-  catch(SecurityException e){drop(made);throw new IOException("permission-lost");}
-  try{
-   if(c==null){drop(made);throw new IOException("storage-unavailable");}
-   if(!c.moveToFirst()||!name.equals(c.getString(0))){drop(made);throw new IOException("file-exists");}
-  }finally{if(c!=null)c.close();}
-  return made;
- }
- public void locate()throws IOException{
-  if(cache!=null){
-   Cursor c=null;
-   try{c=resolver.query(doc(cache),new String[]{OpenableColumns.DISPLAY_NAME,DocumentsContract.Document.COLUMN_MIME_TYPE},null,null,null);}
-   catch(SecurityException e){cache=null;throw new IOException("permission-lost");}
-   try{
-    if(c!=null&&c.moveToFirst()&&DriveSaf.DIR.equals(c.getString(0))&&DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(1)))return;
-   }finally{if(c!=null)c.close();}
-   cache=null;
+  String madeId=DocumentsContract.getDocumentId(made);
+  DriveSafSafAdapter.Doc queried=queryDoc(madeId);
+  if(queried==null){
+   try{DocumentsContract.deleteDocument(resolver,made);}catch(Exception ignore){}
+   throw new IOException("storage-unavailable");
   }
-  String root=DocumentsContract.getTreeDocumentId(tree);
-  try(Cursor c=query(DocumentsContract.buildChildDocumentsUriUsingTree(tree,root),COLS)){
-   while(c.moveToNext())if(DriveSaf.DIR.equals(c.getString(1))){
-    if(DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(2))){cache=c.getString(0);return;}
-    throw new IOException("foreign-directory-refused");
-   }
-  }
-  throw new IOException("cache-absent");
+  return queried;
  }
- public void ensure()throws IOException{
-  try{locate();return;}
-  catch(IOException e){if(!"cache-absent".equals(e.getMessage()))throw e;}
-  String root=DocumentsContract.getTreeDocumentId(tree);
-  cache=DocumentsContract.getDocumentId(create(doc(root),DocumentsContract.Document.MIME_TYPE_DIR,DriveSaf.DIR));
+
+ @Override public void writeDoc(String docId,byte[] data)throws IOException{
+  try(OutputStream out=resolver.openOutputStream(doc(docId))){
+   if(out==null)throw new IOException("storage-unavailable");
+   out.write(data);
+  }catch(SecurityException e){throw new IOException("permission-lost");}
+  catch(FileNotFoundException e){throw new IOException("storage-unavailable");}
  }
- private boolean hasChild(String name)throws IOException{
-  locate();
-  try(Cursor c=query(DocumentsContract.buildChildDocumentsUriUsingTree(tree,cache),COLS)){
-   while(c.moveToNext()){String n=c.getString(1);if(n!=null&&name.equals(n))return true;}
-  }
-  return false;
- }
- private String fileId(String name)throws IOException{
-  locate();
-  try(Cursor c=query(DocumentsContract.buildChildDocumentsUriUsingTree(tree,cache),COLS)){
-   while(c.moveToNext()){
-    String n=c.getString(1);
-    if(n!=null&&name.equals(n)&&!DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(2)))return c.getString(0);
-   }
-  }
-  return null;
- }
- public DriveSaf.Item[] children()throws IOException{
-  locate();List<DriveSaf.Item> out=new ArrayList<>();
-  try(Cursor c=query(DocumentsContract.buildChildDocumentsUriUsingTree(tree,cache),COLS)){
-   while(c.moveToNext()){String n=c.getString(1);if(n!=null)out.add(new DriveSaf.Item(n,DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(2)),c.isNull(3)?-1:c.getLong(3)));}
-  }
-  return out.toArray(new DriveSaf.Item[0]);
- }
- public InputStream read(String name)throws IOException{
-  String i=fileId(name);if(i==null)throw new IOException("blob-absent");
+
+ @Override public InputStream openRead(String docId)throws IOException{
   InputStream in;
-  try{in=resolver.openInputStream(doc(i));}
+  try{in=resolver.openInputStream(doc(docId));}
   catch(SecurityException e){throw new IOException("permission-lost");}
   catch(FileNotFoundException e){throw new IOException("storage-unavailable");}
   if(in==null)throw new IOException("storage-unavailable");
   return in;
  }
- public void create(String name,byte[] data)throws IOException{
-  locate();if(hasChild(name))throw new IOException("file-exists");
-  String mime=DriveSaf.ownerFile(name)?"application/json":"application/octet-stream";
-  Uri made=create(doc(cache),mime,name);
-  try(OutputStream out=resolver.openOutputStream(made)){
-   if(out==null){drop(made);throw new IOException("storage-unavailable");}
-   out.write(data);
-  }catch(SecurityException e){drop(made);throw new IOException("permission-lost");}
-  catch(IOException|RuntimeException e){drop(made);throw new IOException("storage-unavailable");}
+
+ @Override public boolean confirmRegularFile(String docId,long expectedSize)throws IOException{
+  try(ParcelFileDescriptor pfd=resolver.openFileDescriptor(doc(docId),"r")){
+   if(pfd==null)return false;
+   StructStat st=Os.fstat(pfd.getFileDescriptor());
+   return st!=null&&OsConstants.S_ISREG(st.st_mode)&&(expectedSize<0||st.st_size==expectedSize);
+  }catch(SecurityException e){
+   throw new IOException("permission-lost");
+  }catch(Exception e){
+   return false;
+  }
  }
- public void delete(String name)throws IOException{
-  String i=fileId(name);if(i==null)return;
-  boolean gone;try{gone=DocumentsContract.deleteDocument(resolver,doc(i));}
+
+ @Override public void deleteDoc(String docId)throws IOException{
+  boolean gone;
+  try{gone=DocumentsContract.deleteDocument(resolver,doc(docId));}
   catch(SecurityException e){throw new IOException("permission-lost");}
+  catch(FileNotFoundException e){throw new IOException("storage-unavailable");}
   if(!gone)throw new IOException("storage-unavailable");
  }
+
+ @Override public void locate()throws IOException{adapter.locate();}
+ @Override public void ensure()throws IOException{adapter.ensure();}
+ @Override public DriveSaf.Item[] children()throws IOException{return adapter.children();}
+ @Override public InputStream read(DriveSaf.Item item)throws IOException{return adapter.read(item);}
+ @Override public DriveSaf.Item create(String name,byte[] data)throws IOException{return adapter.create(name,data);}
+ @Override public boolean confirmRegularFile(DriveSaf.Item item)throws IOException{return adapter.confirmRegularFile(item);}
+ @Override public void delete(DriveSaf.Item item)throws IOException{adapter.delete(item);}
 }

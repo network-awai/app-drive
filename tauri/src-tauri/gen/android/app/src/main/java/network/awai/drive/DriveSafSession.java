@@ -54,10 +54,10 @@ final class DriveSafSession {
     if(!"cache-absent".equals(e.getMessage()))throw e;
    }
    String instanceId=DriveSafRecord.newInstanceId();
-   DriveSaf.adopt(t,instanceId);
+   DriveSaf.Item marker=DriveSaf.adopt(t,instanceId);
    try{save(next,instanceId);}
    catch(Exception e){
-    try{t.delete(DriveSaf.OWNER_FILE);}catch(Exception ignore){}
+    if(marker!=null){try{t.delete(marker);}catch(Exception ignore){}}
     throw e;
    }
   }catch(Exception e){
@@ -117,6 +117,7 @@ final class DriveSafSession {
    .put("staging",rep.pending).put("unexpected",rep.unexpected)
    .put("unexpectedNames",new JSONArray(rep.unexpectedNames))
    .put("corrupt",rep.corrupt).put("corruptNames",new JSONArray(rep.corruptNames))
+   .put("oversize",rep.oversize).put("oversizeNames",new JSONArray(rep.oversizeNames))
    .put("unreadable",rep.unreadable).put("unreadableNames",new JSONArray(rep.unreadableNames))
    .put("removed",rep.removed).put("clean",rep.clean);
  }
