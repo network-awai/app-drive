@@ -66,7 +66,7 @@ public final class DriveSaf {
  }
  private static boolean fatalError(IOException e){
   String m=e.getMessage();
-  return "permission-lost".equals(m)||"cache-absent".equals(m)||"foreign-directory-refused".equals(m);
+  return "permission-lost".equals(m)||"cache-absent".equals(m)||"foreign-directory-refused".equals(m)||DriveSafPolicy.ERR_PROVIDER.equals(m);
  }
  /** Bounded read enforcing MAX_BLOB_BYTES without deleting. Throws Oversize
   *  if provider metadata reports item.size > MAX_BLOB_BYTES or if the stream

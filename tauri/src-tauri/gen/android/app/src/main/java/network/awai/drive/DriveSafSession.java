@@ -1,11 +1,13 @@
 package network.awai.drive;
 import android.content.*;
 import android.net.Uri;
+import android.provider.DocumentsContract;
 import android.util.AtomicFile;
 import android.util.Base64;
 import org.json.*;
 import java.io.*;
-/** Persisted SAF tree selection, ownership dual-binding (SAF-OWN-02), and
+/** Persisted SAF tree selection, ownership dual-binding (SAF-OWN-02),
+ *  2-stage allowlist enforcement (AWAI-SPEC-REG-SAF-B1-v0.2 §2.3), and
  *  permission revalidation. The record lives in noBackupFilesDir — never on
  *  the picked tree — and stores only the tree URI, appId, and UUIDv4
  *  instanceId. The tree receives re-fetchable ciphertext under cache/; lists,
@@ -16,6 +18,26 @@ final class DriveSafSession {
  private static final int GRANTS=Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
  private final Context context;private final AtomicFile record;
  DriveSafSession(Context c){context=c;record=new AtomicFile(new File(c.getNoBackupFilesDir(),"awai-drive-saf.v1.json"));}
+ private static void validateTreeUri(Uri uri)throws IOException{
+  if(uri==null)throw new IOException(DriveSafPolicy.ERR_PROVIDER);
+  DriveSafPolicy.requireAllowedTreeUri(uri.toString());
+  String docId;
+  try{docId=DocumentsContract.getTreeDocumentId(uri);}
+  catch(IllegalArgumentException e){throw new IOException(DriveSafPolicy.ERR_PROVIDER);}
+  DriveSafPolicy.requireAllowedParts(uri.getScheme(),uri.getAuthority(),docId);
+ }
+ /** Stage 1 fail-closed entry point for cachePick: validates the picked tree
+  *  URI against the com.android.externalstorage.documents allowlist BEFORE
+  *  checking grant flags, taking persistable permissions, or adopting the
+  *  directory. */
+ void acceptPicked(Uri uri,int intentFlags)throws Exception{
+  validateTreeUri(uri);
+  if((intentFlags&GRANTS)!=GRANTS)throw new IOException("persist-unsupported");
+  int flags=intentFlags&(GRANTS|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+  try{context.getContentResolver().takePersistableUriPermission(uri,flags);}
+  catch(SecurityException e){throw new IOException("persist-unsupported");}
+  remember(uri);
+ }
  /** null means no record; malformed content is invalid-saf-record. */
  private DriveSafRecord.Record saved()throws IOException{
   try(FileInputStream in=record.openRead()){
@@ -38,6 +60,7 @@ final class DriveSafSession {
   *  the prior grant so a foreign-directory refusal or failed write leaves the
   *  previous selection fully usable. */
  void remember(Uri tree)throws Exception{
+  validateTreeUri(tree);
   DriveSafRecord.Record prior;
   try{prior=saved();}catch(Exception e){prior=null;} // corrupt prior: overwritten only after safe adoption
   String next=tree.toString();
@@ -76,6 +99,7 @@ final class DriveSafSession {
   try{r=saved();}catch(Exception e){throw new IOException("invalid-saf-record");}
   if(r==null)throw new IOException("cache-absent");
   Uri u=Uri.parse(r.tree);
+  validateTreeUri(u);
   if(!granted(u))throw new IOException("permission-lost");
   if(!r.hasOwnership())throw new IOException("foreign-directory-refused");
   return r;
@@ -93,6 +117,7 @@ final class DriveSafSession {
   try{r=saved();}catch(Exception e){return new JSONObject().put("picked",false).put("state","invalid-record");}
   if(r==null)return new JSONObject().put("picked",false).put("state","absent");
   Uri u=Uri.parse(r.tree);
+  validateTreeUri(u);
   if(!granted(u))return new JSONObject().put("picked",true).put("state","permission-lost");
   if(!r.hasOwnership())return new JSONObject().put("picked",true).put("state","foreign-directory-refused");
   try{
@@ -151,9 +176,11 @@ final class DriveSafSession {
     try{r=saved();}catch(Exception ignore){} // release must always delete, even a corrupt record
     if(r!=null){
      Uri u=Uri.parse(r.tree);
-     if(r.hasOwnership()&&granted(u)){
-      try{DriveSaf.release(new DriveSafDocuments(context.getContentResolver(),u),r.instanceId);}
-      catch(Exception ignore){}
+     if(DriveSafPolicy.isAllowedTreeUri(r.tree)&&r.hasOwnership()&&granted(u)){
+      try{
+       validateTreeUri(u);
+       DriveSaf.release(new DriveSafDocuments(context.getContentResolver(),u),r.instanceId);
+      }catch(Exception ignore){}
      }
      releaseGrant(u);
     }

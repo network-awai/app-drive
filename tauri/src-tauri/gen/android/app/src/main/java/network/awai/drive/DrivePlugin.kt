@@ -48,16 +48,13 @@ class DrivePlugin(private val owner:Activity):Plugin(owner){
  @ActivityCallback fun cachePicked(i:Invoke,result:ActivityResult){
   if(result.resultCode!=Activity.RESULT_OK){i.reject("cache-cancelled");return}
   val data=result.data;val uri=data?.data
-  if(data==null||uri==null||uri.scheme!="content"){i.reject("cache-cancelled");return}
+  if(data==null||uri==null){i.reject("cache-cancelled");return}
   worker.execute{try{cachePickedDone(i,data,uri)}catch(e:Exception){i.reject(code(e))}}
  }
  private fun cachePickedDone(i:Invoke,data:Intent,uri:Uri){
-  // The picked tree is the only SAF target; persistable read+write grants are
-  // required up front so a read-only grant is never stored as usable.
-  val rw=Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-  if(data.flags and rw!=rw){i.reject("persist-unsupported");return}
-  val flags=data.flags and (rw or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-  try{owner.contentResolver.takePersistableUriPermission(uri,flags)}catch(e:SecurityException){i.reject("persist-unsupported");return}
-  saf.remember(uri);i.resolve(JSObject(saf.status().toString()))
+  // Stage 1 fail-closed allowlist (AWAI-SPEC-REG-SAF-B1-v0.2 §2.3) runs in
+  // DriveSafSession.acceptPicked before inspecting grant flags, taking
+  // persistable permissions, or adopting the tree.
+  saf.acceptPicked(uri,data.flags);i.resolve(JSObject(saf.status().toString()))
  }
 }

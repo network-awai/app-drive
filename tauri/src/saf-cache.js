@@ -42,6 +42,7 @@ export const SAF_CACHE_ERRORS=Object.freeze({
  ENTRY_LIMIT:"entry-limit",
  STORAGE_UNAVAILABLE:"storage-unavailable",
  FOREIGN_DIRECTORY_REFUSED:"foreign-directory-refused",
+ LOCAL_PROVIDER_REQUIRED:"local-provider-required",
 });
 export function createSafCache(call){
  return {

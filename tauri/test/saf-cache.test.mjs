@@ -1,8 +1,9 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {readFile,writeFile,rm,stat} from 'node:fs/promises';
-import {dirname,relative,resolve} from 'node:path';
+import {mkdtemp,readdir,readFile,rm,stat} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {dirname,join,relative,resolve} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createSafCache,encodeBase64,decodeBase64,SAF_CACHE_ERRORS} from '../src/saf-cache.js';
 
@@ -57,9 +58,10 @@ test('cache ops map to drive_call payloads and decode reads',async()=>{
  assert.equal(sent[6].sha256,"cd".repeat(32));
 });
 
-test('typed errors propagate unchanged including foreign-directory-refused and storage-unavailable',async()=>{
+test('typed errors propagate unchanged including foreign-directory-refused, storage-unavailable, and local-provider-required',async()=>{
  assert.equal(SAF_CACHE_ERRORS.FOREIGN_DIRECTORY_REFUSED,"foreign-directory-refused");
  assert.equal(SAF_CACHE_ERRORS.STORAGE_UNAVAILABLE,"storage-unavailable");
+ assert.equal(SAF_CACHE_ERRORS.LOCAL_PROVIDER_REQUIRED,"local-provider-required");
  const lost=createSafCache(async()=>{throw Error("permission-lost")});
  await assert.rejects(lost.status,/permission-lost/);
  await assert.rejects(lost.put("ab".repeat(32),new Uint8Array(1)),/permission-lost/);
@@ -71,33 +73,62 @@ test('typed errors propagate unchanged including foreign-directory-refused and s
  const unavailable=createSafCache(async()=>{throw Error(SAF_CACHE_ERRORS.STORAGE_UNAVAILABLE)});
  await assert.rejects(unavailable.put("ab".repeat(32),new Uint8Array(1)),/storage-unavailable/);
  await assert.rejects(unavailable.get("ab".repeat(32)),/storage-unavailable/);
+ const disallowed=createSafCache(async()=>{throw Error(SAF_CACHE_ERRORS.LOCAL_PROVIDER_REQUIRED)});
+ await assert.rejects(disallowed.pick,/local-provider-required/);
+ await assert.rejects(disallowed.status,/local-provider-required/);
+ await assert.rejects(disallowed.put("ab".repeat(32),new Uint8Array(1)),/local-provider-required/);
+ await assert.rejects(disallowed.get("ab".repeat(32)),/local-provider-required/);
+ await assert.rejects(disallowed.verify,/local-provider-required/);
+ await assert.rejects(disallowed.clear,/local-provider-required/);
 });
 
-test('clean dist/ build bundles saf-cache.js, satisfies release.json hashes, and loads dist/app.js via Node ESM',async()=>{
- const tauriConfPath=resolve(appDir,'src-tauri/tauri.conf.json');
- const distDir=resolve(appDir,'dist');
- const priorTauriConf=await readFile(tauriConfPath,'utf8');
+async function snapshotDir(dir){
  try{
-  await rm(distDir,{recursive:true,force:true});
-  execFileSync(process.execPath,[resolve(appDir,'scripts/build.mjs')],{cwd:appDir,stdio:'pipe',encoding:'utf8'});
+  const entries=await readdir(dir,{withFileTypes:true});
+  const out=[];
+  for(const e of entries.sort((a,b)=>a.name.localeCompare(b.name))){
+   const p=resolve(dir,e.name);
+   if(e.isDirectory())out.push({name:e.name,type:'dir',children:await snapshotDir(p)});
+   else if(e.isFile()){const s=await stat(p);out.push({name:e.name,type:'file',size:s.size,mtimeMs:s.mtimeMs});}
+  }
+  return out;
+ }catch(e){
+  if(e&&e.code==='ENOENT')return null;
+  throw e;
+ }
+}
 
-  const distSafPath=resolve(distDir,'saf-cache.js');
+test('isolated AWAI_DRIVE_DIST_DIR build bundles saf-cache.js, satisfies release.json hashes, loads app.js via Node ESM, and leaves shared dist/ and tauri.conf.json untouched',async()=>{
+ const tauriConfPath=resolve(appDir,'src-tauri/tauri.conf.json');
+ const sharedDistDir=resolve(appDir,'dist');
+ const priorTauriConf=await readFile(tauriConfPath,'utf8');
+ const priorSharedDist=await snapshotDir(sharedDistDir);
+ const tmpDist=await mkdtemp(join(tmpdir(),'awai-drive-dist-'));
+ try{
+  execFileSync(process.execPath,[resolve(appDir,'scripts/build.mjs')],{
+   cwd:appDir,
+   env:{...process.env,AWAI_DRIVE_DIST_DIR:tmpDist},
+   stdio:'pipe',
+   encoding:'utf8'
+  });
+
+  const distSafPath=resolve(tmpDist,'saf-cache.js');
   const safStat=await stat(distSafPath);
-  assert.equal(safStat.isFile(),true,'dist/saf-cache.js must exist after clean build');
+  assert.equal(safStat.isFile(),true,'tmpDist/saf-cache.js must exist after isolated build');
 
-  const release=JSON.parse(await readFile(resolve(distDir,'release.json'),'utf8'));
+  const release=JSON.parse(await readFile(resolve(tmpDist,'release.json'),'utf8'));
   assert.equal(typeof release.files['saf-cache.js'],'string','release.json must list saf-cache.js');
   assert.equal(release.files['saf-cache.js'],sha256Hex(await readFile(distSafPath)),'release.json saf-cache.js sha256 mismatch');
 
   for(const [relName,expectedHash] of Object.entries(release.files)){
-   const abs=resolve(distDir,relName);
+   const abs=resolve(tmpDist,relName);
    const st=await stat(abs);
-   assert.equal(st.isFile(),true,`release.json file missing in dist/: ${relName}`);
+   assert.equal(st.isFile(),true,`release.json file missing in tmpDist/: ${relName}`);
    assert.equal(sha256Hex(await readFile(abs)),expectedHash,`release.json sha256 mismatch for ${relName}`);
   }
 
-  // Walk every static relative ESM import reachable from dist/app.js.
-  const entryPath=resolve(distDir,'app.js');
+  // Walk every static relative ESM import reachable from tmpDist/app.js.
+  const entryPath=resolve(tmpDist,'app.js');
   const visited=new Set([entryPath]);
   const queue=[entryPath];
   const discoveredRel=new Set(['app.js']);
@@ -106,26 +137,27 @@ test('clean dist/ build bundles saf-cache.js, satisfies release.json hashes, and
    const src=await readFile(cur,'utf8');
    for(const spec of extractStaticRelativeImports(src)){
     const target=resolve(dirname(cur),spec);
-    const rel=relative(distDir,target).replaceAll('\\','/');
-    assert.ok(!rel.startsWith('..')&&!rel.startsWith('/'),`static import escapes dist/: ${spec} from ${relative(distDir,cur)}`);
+    const rel=relative(tmpDist,target).replaceAll('\\','/');
+    assert.ok(!rel.startsWith('..')&&!rel.startsWith('/'),`static import escapes tmpDist/: ${spec} from ${relative(tmpDist,cur)}`);
     const st=await stat(target);
-    assert.equal(st.isFile(),true,`static import missing in dist/: ${rel} (from ${relative(distDir,cur)})`);
+    assert.equal(st.isFile(),true,`static import missing in tmpDist/: ${rel} (from ${relative(tmpDist,cur)})`);
     assert.equal(typeof release.files[rel],'string',`static import missing from release.json.files: ${rel}`);
     discoveredRel.add(rel);
     if(!visited.has(target)){visited.add(target);queue.push(target);}
    }
   }
-  assert.equal(discoveredRel.has('saf-cache.js'),true,'dist/app.js static import graph must reach saf-cache.js');
+  assert.equal(discoveredRel.has('saf-cache.js'),true,'tmpDist/app.js static import graph must reach saf-cache.js');
 
-  // Direct ESM import of dist/saf-cache.js checking all exports.
+  // Direct ESM import of tmpDist/saf-cache.js checking all exports.
   const builtSaf=await import(pathToFileURL(distSafPath).href);
   assert.equal(typeof builtSaf.createSafCache,'function');
   assert.equal(typeof builtSaf.encodeBase64,'function');
   assert.equal(typeof builtSaf.decodeBase64,'function');
   assert.equal(builtSaf.SAF_CACHE_ERRORS.FOREIGN_DIRECTORY_REFUSED,'foreign-directory-refused');
   assert.equal(builtSaf.SAF_CACHE_ERRORS.STORAGE_UNAVAILABLE,'storage-unavailable');
+  assert.equal(builtSaf.SAF_CACHE_ERRORS.LOCAL_PROVIDER_REQUIRED,'local-provider-required');
 
-  // Load dist/app.js directly through Node's real ESM loader in an isolated subprocess
+  // Load tmpDist/app.js directly through Node's real ESM loader in an isolated subprocess
   // with minimal DOM/window stubs so ./saf-cache.js and every sibling static import resolve cleanly.
   const appUrl=pathToFileURL(entryPath).href;
   const loaderScript=`
@@ -239,7 +271,11 @@ console.log(JSON.stringify({ok:true,methods:Object.keys(saf).sort(),invokedCount
   const parsed=JSON.parse(stdout.trim().split('\n').pop());
   assert.equal(parsed.ok,true);
   assert.deepEqual(parsed.methods,['clear','get','pick','put','release','status','verify']);
+
+  // Isolated build must never mutate shared dist/ or src-tauri/tauri.conf.json.
+  assert.equal(await readFile(tauriConfPath,'utf8'),priorTauriConf,'src-tauri/tauri.conf.json must not be mutated by isolated build');
+  assert.deepEqual(await snapshotDir(sharedDistDir),priorSharedDist,'shared dist/ must not be mutated by isolated build');
  }finally{
-  await writeFile(tauriConfPath,priorTauriConf,'utf8');
+  await rm(tmpDist,{recursive:true,force:true});
  }
 });

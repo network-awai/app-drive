@@ -23,6 +23,7 @@ public final class DriveSafSafAdapter implements DriveSaf.Tree {
  }
 
  public interface Provider {
+  String treeUri()throws IOException;
   String rootId()throws IOException;
   Doc queryDoc(String docId)throws IOException;
   List<Doc> listChildren(String parentId)throws IOException;
@@ -41,6 +42,10 @@ public final class DriveSafSafAdapter implements DriveSaf.Tree {
  }
 
  public String pinnedCacheId(){return pinnedCacheId;}
+
+ private void requireAllowedTree()throws IOException{
+  DriveSafPolicy.requireAllowedTreeUri(provider.treeUri());
+ }
 
  private static boolean nonEmpty(String s){return s!=null&&!s.isEmpty();}
 
@@ -111,6 +116,7 @@ public final class DriveSafSafAdapter implements DriveSaf.Tree {
  }
 
  @Override public void locate()throws IOException{
+  requireAllowedTree();
   if(pinnedCacheId!=null){verifyPinnedCache();return;}
   String root=requireRootId();
   List<Doc> kids=provider.listChildren(root);
@@ -128,6 +134,7 @@ public final class DriveSafSafAdapter implements DriveSaf.Tree {
  }
 
  @Override public void ensure()throws IOException{
+  requireAllowedTree();
   if(pinnedCacheId!=null){verifyPinnedCache();return;}
   try{locate();return;}
   catch(IOException e){if(!"cache-absent".equals(e.getMessage()))throw e;}
@@ -141,6 +148,7 @@ public final class DriveSafSafAdapter implements DriveSaf.Tree {
  }
 
  @Override public DriveSaf.Item[] children()throws IOException{
+  requireAllowedTree();
   if(pinnedCacheId==null)locate();
   else verifyPinnedCache();
   List<Doc> kids=provider.listChildren(pinnedCacheId);
@@ -171,6 +179,7 @@ public final class DriveSafSafAdapter implements DriveSaf.Tree {
  }
 
  @Override public InputStream read(DriveSaf.Item item)throws IOException{
+  requireAllowedTree();
   Doc d=resolvePinnedRegularChild(item);
   InputStream in=provider.openRead(d.id);
   if(in==null)throw new IOException("storage-unavailable");
@@ -178,6 +187,7 @@ public final class DriveSafSafAdapter implements DriveSaf.Tree {
  }
 
  @Override public DriveSaf.Item create(String name,byte[] data)throws IOException{
+  requireAllowedTree();
   if(pinnedCacheId==null)throw new IOException("cache-absent");
   verifyPinnedCache();
   if(!nonEmpty(name)||data==null)throw new IOException("invalid-name");
@@ -194,7 +204,7 @@ public final class DriveSafSafAdapter implements DriveSaf.Tree {
    dropBestEffort(made.id);
    if(e instanceof IOException io){
     String m=io.getMessage();
-    if("permission-lost".equals(m)||"cache-absent".equals(m)||"foreign-directory-refused".equals(m))throw io;
+    if("permission-lost".equals(m)||"cache-absent".equals(m)||"foreign-directory-refused".equals(m)||DriveSafPolicy.ERR_PROVIDER.equals(m))throw io;
    }
    throw new IOException("storage-unavailable");
   }
@@ -207,12 +217,14 @@ public final class DriveSafSafAdapter implements DriveSaf.Tree {
  }
 
  @Override public boolean confirmRegularFile(DriveSaf.Item item)throws IOException{
+  requireAllowedTree();
   if(item==null||!item.regularFile())return false;
   Doc d=resolvePinnedRegularChild(item);
   return provider.confirmRegularFile(d.id,d.size);
  }
 
  @Override public void delete(DriveSaf.Item item)throws IOException{
+  requireAllowedTree();
   if(item==null||!item.regularFile())throw new IOException("foreign-directory-refused");
   Doc d=resolvePinnedRegularChild(item);
   if((d.flags.intValue()&FLAG_SUPPORTS_DELETE)==0)throw new IOException("foreign-directory-refused");

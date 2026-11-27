@@ -1,4 +1,5 @@
 import network.awai.drive.DriveSaf;
+import network.awai.drive.DriveSafPolicy;
 import network.awai.drive.DriveSafRecord;
 import network.awai.drive.DriveSafSafAdapter;
 import java.io.*;
@@ -6,8 +7,9 @@ import java.security.*;
 import java.util.*;
 import java.util.concurrent.Callable;
 
-/** JVM adapter-boundary tests for DriveSafSafAdapter + DriveSaf covering
- *  pinned cache doc IDs, unambiguous root scans, pinned child identity,
+/** JVM adapter-boundary tests for DriveSafPolicy + DriveSafSafAdapter + DriveSaf
+ *  covering AWAI-SPEC-REG-SAF-B1-v0.2 §2.3 strict ExternalStorageProvider
+ *  allowlist, pinned cache doc IDs, unambiguous root scans, pinned child identity,
  *  regular-file & FLAG_SUPPORTS_DELETE confirmation, duplicate display names,
  *  symlink/virtual/malformed metadata preservation, oversize non-deletion,
  *  and end-to-end happy path. */
@@ -39,10 +41,16 @@ public class DriveSafDocumentsTest {
  }
 
  static final class MockProvider implements DriveSafSafAdapter.Provider {
+  static final String DEFAULT_TREE_URI="content://com.android.externalstorage.documents/tree/primary%3ADownload%2FAwai";
+  String treeUri=DEFAULT_TREE_URI;
   final String root="root-0";
   final Map<String,Node> docs=new LinkedHashMap<>();
+  final List<String> queryDocCalls=new ArrayList<>();
+  final List<String> listChildrenCalls=new ArrayList<>();
   final List<String> createDocCalls=new ArrayList<>();
   final List<String> writeDocCalls=new ArrayList<>();
+  final List<String> openReadCalls=new ArrayList<>();
+  final List<String> confirmRegularFileCalls=new ArrayList<>();
   final List<String> deleteDocCalls=new ArrayList<>();
   int seq=1;
   Runnable onAfterOpenReadOwner;
@@ -50,7 +58,18 @@ public class DriveSafDocumentsTest {
   MockProvider(){
    docs.put(root,new Node(root,null,"tree-root",DriveSafSafAdapter.MIME_TYPE_DIR,0,DriveSafSafAdapter.FLAG_SUPPORTS_DELETE,null));
   }
-  void resetCalls(){createDocCalls.clear();writeDocCalls.clear();deleteDocCalls.clear();}
+  MockProvider(String treeUri){
+   this();
+   this.treeUri=treeUri;
+  }
+  void resetCalls(){
+   queryDocCalls.clear();listChildrenCalls.clear();createDocCalls.clear();
+   writeDocCalls.clear();openReadCalls.clear();confirmRegularFileCalls.clear();deleteDocCalls.clear();
+  }
+  int totalIoCalls(){
+   return queryDocCalls.size()+listChildrenCalls.size()+createDocCalls.size()
+    +writeDocCalls.size()+openReadCalls.size()+confirmRegularFileCalls.size()+deleteDocCalls.size();
+  }
   Node add(String id,String parentId,String name,String mime,long reportedSize,Integer flags,byte[] bytes){
    Node n=new Node(id,parentId,name,mime,reportedSize,flags,bytes);
    docs.put(id,n);
@@ -62,12 +81,15 @@ public class DriveSafDocumentsTest {
   Node addFile(String id,String parentId,String name,byte[] bytes){
    return add(id,parentId,name,"application/octet-stream",bytes.length,DriveSafSafAdapter.FLAG_SUPPORTS_DELETE,bytes);
   }
+  @Override public String treeUri(){return treeUri;}
   @Override public String rootId(){return root;}
   @Override public DriveSafSafAdapter.Doc queryDoc(String docId){
+   queryDocCalls.add(docId);
    Node n=docs.get(docId);
    return n==null?null:n.toDoc();
   }
   @Override public List<DriveSafSafAdapter.Doc> listChildren(String parentId){
+   listChildrenCalls.add(parentId);
    if(!docs.containsKey(parentId))return null;
    List<DriveSafSafAdapter.Doc> out=new ArrayList<>();
    for(Node n:docs.values())if(parentId.equals(n.parentId))out.add(n.toDoc());
@@ -89,6 +111,7 @@ public class DriveSafDocumentsTest {
    n.reportedSize=data.length;
   }
   @Override public InputStream openRead(String docId)throws IOException{
+   openReadCalls.add(docId);
    Node n=docs.get(docId);
    if(n==null||n.bytes==null)throw new IOException("storage-unavailable");
    if(DriveSaf.OWNER_FILE.equals(n.name)&&onAfterOpenReadOwner!=null){
@@ -99,6 +122,7 @@ public class DriveSafDocumentsTest {
    return new ByteArrayInputStream(n.bytes);
   }
   @Override public boolean confirmRegularFile(String docId,long expectedSize){
+   confirmRegularFileCalls.add(docId);
    Node n=docs.get(docId);
    if(n==null||!n.regularFd||n.bytes==null)return false;
    long actualSize=n.statSizeOverride!=null?n.statSizeOverride.longValue():n.bytes.length;
@@ -410,6 +434,118 @@ public class DriveSafDocumentsTest {
    yes(p.docs.containsKey("foreign-note"));
   }
 
-  System.out.println("DriveSafDocumentsTest: "+checks+" checks passed: pinned cache doc ID, unambiguous root scan, pinned child identity, regular-file & FLAG_SUPPORTS_DELETE confirmation, duplicate display names, symlink/virtual/malformed metadata preservation, oversize non-deletion, end-to-end lifecycle.");
+  // --- Scenario 9: DriveSafPolicy + DriveSafSafAdapter strict allowlist (AWAI-SPEC-REG-SAF-B1-v0.2 §2.3) ---
+  {
+   eq(DriveSafPolicy.ALLOWED_SCHEME,"content");
+   eq(DriveSafPolicy.ALLOWED_AUTHORITY,"com.android.externalstorage.documents");
+   eq(DriveSafPolicy.ERR_PROVIDER,"local-provider-required");
+
+   String[] allowedUris={
+    "content://com.android.externalstorage.documents/tree/primary%3ADownload%2FAwai",
+    "content://com.android.externalstorage.documents/tree/1234-5678%3AAwaiCache",
+    "content://com.android.externalstorage.documents/tree/primary%3A",
+    "content://com.android.externalstorage.documents/tree/0123-ABCD%3AAndroid%2Fmedia%2Fcache"
+   };
+   for(String good:allowedUris){
+    DriveSafPolicy.requireAllowedTreeUri(good);
+    yes(DriveSafPolicy.isAllowedTreeUri(good));
+    MockProvider p=new MockProvider(good);
+    DriveSafSafAdapter t=new DriveSafSafAdapter(p);
+    DriveSaf.adopt(t,instanceId);
+    eq(DriveSaf.put(t,instanceId,h1,blob1),"stored");
+    yes(Arrays.equals(DriveSaf.get(t,instanceId,h1),blob1));
+   }
+   DriveSafPolicy.requireAllowedParts("content","com.android.externalstorage.documents","primary:Download/Awai");
+   DriveSafPolicy.requireAllowedParts("content","com.android.externalstorage.documents","1234-5678:AwaiCache");
+
+   String[] rejectedUris={
+    null,
+    "",
+    "file:///tmp/cache",
+    "https://com.android.externalstorage.documents/tree/primary%3ADownload%2FAwai",
+    "CONTENT://com.android.externalstorage.documents/tree/primary%3ADownload%2FAwai",
+    "content://com.example.thirdparty.documents/tree/primary%3AAwai",
+    "content://com.google.android.apps.docs.storage/tree/acc%3D1%3Bdoc%3D42",
+    "content://com.android.providers.downloads.documents/tree/downloads",
+    "content://com.android.providers.media.documents/tree/image%3A123",
+    "content://network.awai.drive.documents/tree/primary%3AAwai",
+    "content://user@com.android.externalstorage.documents/tree/primary%3AAwai",
+    "content://com.android.externalstorage.documents:443/tree/primary%3AAwai",
+    "content://com.android.externalstorage.documents/document/primary%3ADownload%2FAwai",
+    "content://com.android.externalstorage.documents/tree/",
+    "content://com.android.externalstorage.documents/tree/primary%3ADownload/extra",
+    "content://com.android.externalstorage.documents/tree/primary%3ADownload?q=1",
+    "content://com.android.externalstorage.documents/tree/primary%3ADownload#frag",
+    "content://com.android.externalstorage.documents/tree/primary%3ADownload%2F..%2Fsecret",
+    "content://com.android.externalstorage.documents/tree/primary%3ADownload%2F%2e%2e%2Fsecret",
+    "content://com.android.externalstorage.documents/tree/primary%3ADownload%2F%2E%2E%2Fsecret",
+    "content://com.android.externalstorage.documents/tree/primary%3A.%2e",
+    "content://com.android.externalstorage.documents/tree/primary%3A..%2Fescape",
+    "content://com.android.externalstorage.documents/tree/primary%3Aa%00b",
+    "content://com.android.externalstorage.documents/tree/primary%3Aa\0b",
+    "content://com.android.externalstorage.documents/tree/primary%3Aa%0ab",
+    "content://com.android.externalstorage.documents/tree/primary%3Aa%1fb",
+    "content://com.android.externalstorage.documents/tree/primary%3Aa%7fb",
+    "content://com.android.externalstorage.documents/tree/primary%3Aa\nb",
+    "content://com.android.externalstorage.documents/tree/primary%3Aa\\b",
+    "content://com.android.externalstorage.documents/tree/primary%3Aa%5cb",
+    "content://com.android.externalstorage.documents/tree/primary%3",
+    "content://com.android.externalstorage.documents/tree/primary%ZZ",
+    "content://com.android.externalstorage.documents/tree/primary%FF",
+    "content://com.android.externalstorage.documents/tree/Download%2FAwai",
+    "content://com.android.externalstorage.documents/tree/%3ADownload"
+   };
+   DriveSaf.Item dummyItem=new DriveSaf.Item(h1,"doc-1",false,false,true,blob1.length);
+   for(String bad:rejectedUris){
+    yes(!DriveSafPolicy.isAllowedTreeUri(bad));
+    eq(code(()->{DriveSafPolicy.requireAllowedTreeUri(bad);return null;}),"local-provider-required");
+    MockProvider p=new MockProvider(bad);
+    p.addDir("cache-1",p.root,DriveSaf.DIR,DriveSafSafAdapter.FLAG_SUPPORTS_DELETE);
+    p.addFile("doc-1","cache-1",h1,blob1);
+    p.resetCalls();
+    DriveSafSafAdapter t=new DriveSafSafAdapter(p);
+    eq(code(()->{t.locate();return null;}),"local-provider-required");
+    eq(code(()->{t.ensure();return null;}),"local-provider-required");
+    eq(code(()->t.children()),"local-provider-required");
+    eq(code(()->t.read(dummyItem)),"local-provider-required");
+    eq(code(()->t.create(h1,blob1)),"local-provider-required");
+    eq(code(()->t.confirmRegularFile(dummyItem)),"local-provider-required");
+    eq(code(()->{t.delete(dummyItem);return null;}),"local-provider-required");
+    eq(code(()->DriveSaf.adopt(t,instanceId)),"local-provider-required");
+    eq(code(()->DriveSaf.inspect(t,instanceId,false)),"local-provider-required");
+    eq(code(()->DriveSaf.verify(t,instanceId)),"local-provider-required");
+    eq(code(()->DriveSaf.put(t,instanceId,h1,blob1)),"local-provider-required");
+    eq(code(()->DriveSaf.get(t,instanceId,h1)),"local-provider-required");
+    eq(code(()->DriveSaf.clear(t,instanceId)),"local-provider-required");
+    eq(code(()->DriveSaf.release(t,instanceId)),"local-provider-required");
+    // ZERO provider I/O calls across every disallowed authority / malformed tree URI!
+    eq(p.totalIoCalls(),0);
+    eq(p.queryDocCalls.size(),0);
+    eq(p.listChildrenCalls.size(),0);
+    eq(p.createDocCalls.size(),0);
+    eq(p.writeDocCalls.size(),0);
+    eq(p.openReadCalls.size(),0);
+    eq(p.confirmRegularFileCalls.size(),0);
+    eq(p.deleteDocCalls.size(),0);
+   }
+
+   // Direct requireAllowedParts negative checks
+   eq(code(()->{DriveSafPolicy.requireAllowedParts(null,"com.android.externalstorage.documents","primary:a");return null;}),"local-provider-required");
+   eq(code(()->{DriveSafPolicy.requireAllowedParts("file","com.android.externalstorage.documents","primary:a");return null;}),"local-provider-required");
+   eq(code(()->{DriveSafPolicy.requireAllowedParts("content","com.android.providers.downloads.documents","downloads");return null;}),"local-provider-required");
+   eq(code(()->{DriveSafPolicy.requireAllowedParts("content","com.android.providers.media.documents","image:1");return null;}),"local-provider-required");
+   eq(code(()->{DriveSafPolicy.requireAllowedParts("content","network.awai.drive.documents","primary:a");return null;}),"local-provider-required");
+   eq(code(()->{DriveSafPolicy.requireAllowedParts("content","com.android.externalstorage.documents",null);return null;}),"local-provider-required");
+   eq(code(()->{DriveSafPolicy.requireAllowedParts("content","com.android.externalstorage.documents","");return null;}),"local-provider-required");
+   eq(code(()->{DriveSafPolicy.requireAllowedParts("content","com.android.externalstorage.documents","primary:a/../b");return null;}),"local-provider-required");
+   eq(code(()->{DriveSafPolicy.requireAllowedParts("content","com.android.externalstorage.documents","primary:a\0b");return null;}),"local-provider-required");
+   eq(code(()->{DriveSafPolicy.requireAllowedParts("content","com.android.externalstorage.documents","primary:a\u001fb");return null;}),"local-provider-required");
+   eq(code(()->{DriveSafPolicy.requireAllowedParts("content","com.android.externalstorage.documents","primary:a\u007fb");return null;}),"local-provider-required");
+   eq(code(()->{DriveSafPolicy.requireAllowedParts("content","com.android.externalstorage.documents","primary:a\\b");return null;}),"local-provider-required");
+   eq(code(()->{DriveSafPolicy.requireAllowedParts("content","com.android.externalstorage.documents",":Download");return null;}),"local-provider-required");
+   eq(code(()->{DriveSafPolicy.requireAllowedParts("content","com.android.externalstorage.documents","no-colon");return null;}),"local-provider-required");
+  }
+
+  System.out.println("DriveSafDocumentsTest: "+checks+" checks passed: DriveSafPolicy allowlist (zero provider I/O on disallowed authorities), pinned cache doc ID, unambiguous root scan, pinned child identity, regular-file & FLAG_SUPPORTS_DELETE confirmation, duplicate display names, symlink/virtual/malformed metadata preservation, oversize non-deletion, end-to-end lifecycle.");
  }
 }

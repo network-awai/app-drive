@@ -1,38 +1,93 @@
-# AWAI-4123 Android SAF cache qualification — 2026-11-27 (remediated 2026-11-28, Round 2 P1 fixes)
+# AWAI-4123 Android SAF cache qualification — 2026-11-27 (remediated 2026-11-28, Round 3 P1/P2 fixes)
 
 Source under test: `com-junkawasaki/awai-4123-android-saf` branch head (see PR #36 for the exact
 revision). Parent: AWAI-4118; scope fixed by the AWAI-4123 owner comment of
-2026-11-26 and `AWAI-SPEC-REG-SAF-B1-v0.1` §2 (`SAF-OWN-01`–`04`). Design
+2026-11-26 and `AWAI-SPEC-REG-SAF-B1-v0.2` §2 (`SAF-OWN-01`–`04`, including §2.3
+Android SAF non-symlink boundary and 2-stage allowlist). Design
 context: [drive-host-ipc.md](drive-host-ipc.md) §7,
 [portable-usb-custody.md](portable-usb-custody.md),
 [scalable-sync-design.md](scalable-sync-design.md) §4.8–4.9.
 
-## Scope delivered & Round 2 P1 remediations
+## Scope delivered & Round 2 / Round 3 remediations
 
-- **Frontend bundling & clean-build entry-load verification (P1 #1):**
+- **Frontend bundling & isolated clean-build entry-load verification (Round 2 P1 #1 + Round 3 P2):**
   - `scripts/build.mjs` copies `src/saf-cache.js` into `dist/saf-cache.js` and
     records its SHA-256 in `dist/release.json` (`files['saf-cache.js']`), so
     `dist/app.js`'s static `./saf-cache.js` import resolves in clean Tauri builds.
-  - `test/saf-cache.test.mjs` snapshots/restores `src-tauri/tauri.conf.json`,
-    deletes `dist/`, runs `node scripts/build.mjs`, verifies SHA-256 integrity
-    for every entry in `dist/release.json`, walks every static relative ESM
-    import reachable from `dist/app.js` (confirming presence in both `dist/`
-    and `release.json.files`), imports `dist/saf-cache.js` directly, and loads
-    `dist/app.js` via Node's real ESM loader in an isolated subprocess with
-    minimal DOM/window stubs.
+  - `scripts/build.mjs` supports an optional `AWAI_DRIVE_DIST_DIR` environment
+    variable so isolated test builds write into a temporary directory while
+    still running `clientRuntimeProblems(...)` and CSP computation, without
+    mutating shared `dist/` or `src-tauri/tauri.conf.json`.
+  - `test/saf-cache.test.mjs` builds into an isolated `mkdtemp` directory via
+    `AWAI_DRIVE_DIST_DIR` (cleaned up in `finally`), verifies SHA-256 integrity
+    for every entry in `release.json`, walks every static relative ESM import
+    reachable from `app.js` (confirming presence in both `tmpDist/` and
+    `release.json.files`), imports `saf-cache.js` directly (verifying
+    `SAF_CACHE_ERRORS.LOCAL_PROVIDER_REQUIRED === "local-provider-required"`),
+    loads `app.js` via Node's real ESM loader in an isolated subprocess with
+    minimal DOM/window stubs, and asserts neither shared `dist/` nor
+    `src-tauri/tauri.conf.json` was mutated (preventing parallel test races with
+    `account-heads.test.mjs`, `account-link.test.mjs`, and `core.test.mjs`).
+- **`AWAI-SPEC-REG-SAF-B1-v0.2` §2.3 — 2-stage fail-closed `ExternalStorageProvider` allowlist & Honest Non-Goal Disclosure (Round 3 P1):**
+  - **Honest Non-Goal / Residual Risk Disclosure:** Android
+    `DocumentsContract` / `ContentResolver` exposes no `lstat(2)`, `O_NOFOLLOW`,
+    or `COLUMN_IS_SYMLINK` API. `openFileDescriptor` + `Os.fstat(S_ISREG)`
+    confirms only that the opened target FD refers to a regular file, **not**
+    non-symlink path traversal on arbitrary providers. Generic 3rd-party SAF
+    non-symlink proof is explicitly **not** claimed (documented here and in
+    `DriveSafDocuments.java` Javadoc). Deletion safety on Android SAF relies on
+    the fail-closed `com.android.externalstorage.documents` allowlist
+    (`ExternalStorageProvider`'s `FileSystemProvider.deleteDocument()` uses
+    `File.delete()` / `unlink(2)` without following symlinks, and standard
+    Android FUSE / removable external storage volumes do not permit POSIX
+    symlink creation inside app-managed `cache/`) layered with `SAF-OWN-01..03`.
+  - **Pure-Java URI policy (`DriveSafPolicy.java`, zero `android.*` imports):**
+    Strictly requires `scheme == "content"`,
+    `authority == "com.android.externalstorage.documents"` (rejecting
+    `com.android.providers.downloads.documents`,
+    `com.android.providers.media.documents`, unimplemented
+    `network.awai.drive.documents`, cloud/3rd-party authorities, userinfo `@`,
+    port `:`, `file://`, empty/null), single `/tree/<encodedTreeDocumentId>`
+    path segment (no query/fragment/extra `/`), valid UTF-8 percent-encoding,
+    non-empty volume prefix before `:` (e.g. `primary:...`, `XXXX-XXXX:...`),
+    and no `..` (raw or percent-decoded), NUL (`\0`), control chars (`< 0x20` or
+    `0x7f`), or backslash `\`. Any violation fails closed with
+    `IOException("local-provider-required")`, kept orthogonal to
+    `"foreign-directory-refused"` (`SAF-OWN-02`).
+  - **Stage 1 (`cachePick` / `DrivePlugin.kt` → `DriveSafSession.acceptPicked`):**
+    `DrivePlugin.cachePicked` rejects `"cache-cancelled"` only when
+    `data == null || uri == null` (non-`content` URIs such as `file://` flow to
+    `acceptPicked` and reject `"local-provider-required"`). `acceptPicked` runs
+    `validateTreeUri(uri)` (`DriveSafPolicy.requireAllowedTreeUri` +
+    `DriveSafPolicy.requireAllowedParts(..., DocumentsContract.getTreeDocumentId(uri))`)
+    **before** inspecting grant flags, **before** calling
+    `takePersistableUriPermission`, and **before** `remember(uri)`.
+  - **Stage 2 (runtime re-validation in `DriveSafSession`, `DriveSafDocuments`,
+    and `DriveSafSafAdapter`):** `remember`, `active`, `status`, and every
+    `DriveSaf.Tree` / `DriveSafSafAdapter.Provider` entry point re-validate the
+    tree URI before any `ContentResolver` or `DocumentsContract.*` I/O call. A
+    tampered/legacy persisted `awai-drive-saf.v1.json` with a disallowed
+    authority fails closed with `IOException("local-provider-required")` and
+    **0** `DocumentsContract` calls across `cacheStatus`, `cachePut`,
+    `cacheGet`, `cacheVerify`, and `cacheClear`; `cacheRelease` checks
+    `DriveSafPolicy.isAllowedTreeUri(r.tree)` before calling `DriveSaf.release`
+    so a disallowed authority makes **0** `DocumentsContract.deleteDocument`
+    calls while still releasing any grant and deleting the local record.
 - **`cachePick` & persistable tree record:**
-  `cachePick` launches `ACTION_OPEN_DOCUMENT_TREE`; on result the plugin
-  requires read+write grant flags, calls
-  `takePersistableUriPermission(READ|WRITE|PERSISTABLE)`, adopts or verifies
-  `<picked>/cache/` ownership (`SAF-OWN-02`), and stores the tree URI, `appId`,
-  and UUIDv4 `instanceId` in a `noBackupFilesDir` AtomicFile record
-  (`awai-drive-saf.v1.json`, schema `awai.drive.saf.v1`, ≤4 KiB). Deny/cancel
-  or a non-content result rejects `cache-cancelled` before any state is
-  written; a missing persistable grant rejects `persist-unsupported`; a
-  non-empty foreign directory rejects `foreign-directory-refused` with zero
-  writes/deletes and releases the rejected grant while leaving any prior
-  selection intact. On failed local record save, `DriveSafSession.remember`
-  rolls back strictly via the newly created `DriveSaf.Item` marker handle.
+  `cachePick` launches `ACTION_OPEN_DOCUMENT_TREE`; on result
+  `DriveSafSession.acceptPicked` validates the allowlist, requires read+write
+  grant flags, calls `takePersistableUriPermission(READ|WRITE|PERSISTABLE)`,
+  adopts or verifies `<picked>/cache/` ownership (`SAF-OWN-02`), and stores the
+  tree URI, `appId`, and UUIDv4 `instanceId` in a `noBackupFilesDir` AtomicFile
+  record (`awai-drive-saf.v1.json`, schema `awai.drive.saf.v1`, ≤4 KiB).
+  Deny/cancel rejects `cache-cancelled` before any state is written; a
+  disallowed provider or non-`content` URI rejects `local-provider-required`
+  before `takePersistableUriPermission`; a missing persistable grant rejects
+  `persist-unsupported`; a non-empty foreign directory rejects
+  `foreign-directory-refused` with zero writes/deletes and releases the rejected
+  grant while leaving any prior selection intact. On failed local record save,
+  `DriveSafSession.remember` rolls back strictly via the newly created
+  `DriveSaf.Item` marker handle.
 - **`SAF-OWN-01` & Android SAF protocol boundary (P1 #2):**
   - `DriveSaf.Item` carries pinned `id` and `verifiedRegularFile` (`regularFile()`
     requires `verifiedRegularFile && !directory && !symlink`). `DriveSaf.Tree`
@@ -135,25 +190,30 @@ Toolchains used in local verification (2026-11-28):
 - JDK: `javac 21.0.10` / `OpenJDK 21.0.10` (`/opt/homebrew/Cellar/openjdk@21/21.0.10/bin`)
 - Node: `v26.3.0`
 - Android SDK stub jar (compile-check only, no Gradle/APK build): `/Users/node/Library/Android/sdk/platforms/android-37.0/android.jar`
+- Kotlin compiler (`kotlinc`): not installed in local environment (`DrivePlugin.kt` inspected against `DriveSafSession.acceptPicked(Uri, int)` signature; full Kotlin compile deferred to Gradle/APK device QA pass)
 
 | Check | Exact command | Toolchain | Exit code | Pass / Fail / Skip & coverage |
 | --- | --- | --- | ---: | --- |
 | `DriveSafRecordTest` (JVM) | `"$JDK/java" -cp "$TMPDIR_JAVA" DriveSafRecordTest` | OpenJDK 21.0.10 | `0` | **127 pass / 0 fail / 0 skip** (`test/DriveSafRecordTest.java`): record (`tree` + `appId` + UUIDv4 `instanceId`) and owner-marker encode→decode roundtrips, legacy record fail-closed flag, strict rejection of malformed/duplicate-key/wrong-field inputs |
-| `DriveSafTest` (JVM) | `"$JDK/java" -cp "$TMPDIR_JAVA" DriveSafTest "$TMPDIR_JAVA/SAF-TEST"` | OpenJDK 21.0.10 | `0` | **558 pass / 0 fail / 0 skip** (`test/DriveSafTest.java`): `SAF-OWN-01..04` pinned `Item` handles, `locate()` vs `ensure()`, ownership adoption/refusal with zero mutations, double-gated `clearDetailed` & `release`, oversize non-deletion (provider metadata header alone + stream exceeding `MAX_BLOB_BYTES` across `verify`/`inspect`/`get`/`put`), mixed `verify` deleting ONLY measured SHA-256 mismatch while preserving intact/oversize/unreadable/owner, transient read `IOException` preservation, rebuild, staging cleanup, typed errors, entry/byte ceilings |
-| `DriveSafDocumentsTest` (JVM) | `"$JDK/java" -cp "$TMPDIR_JAVA" DriveSafDocumentsTest` | OpenJDK 21.0.10 | `0` | **145 pass / 0 fail / 0 skip** (`test/DriveSafDocumentsTest.java`): `DriveSafSafAdapter` + `DriveSaf` boundary tests — pinned `cache` doc ID swapped/moved between `verifyOwner` and `delete` (zero `deleteDoc`, never rebinds to `cache-2`), duplicate/non-dir/virtual/null-flags `"cache"` at root (zero mutations), child doc ID swapped between `children()` and `delete(item)` (zero `deleteDoc`), child renamed/moved/MIME-changed/virtual/lost-`FLAG_SUPPORTS_DELETE`/failed-`confirmRegularFile` (`S_ISREG == false` and size mismatch) between `children()` and `delete(item)` (zero `deleteDoc`), duplicate display names inside `cache/` (regular file deleted by doc ID, sibling dir untouched), symlink MIMEs (`inode/symlink`, `application/x-symlink`, `INODE/FIFO`) / `vnd.android.document/*` / null & empty MIME / null flags / `FLAG_VIRTUAL_DOCUMENT` / `confirmRegularFile == false` preserved as `preservedForeign` & `unexpected` (zero `deleteDoc`), oversize non-deletion through adapter, end-to-end happy path (`adopt` → `put` → `get` → `verify` → `clear` → `release`) |
+| `DriveSafTest` (JVM) | `"$JDK/java" -cp "$TMPDIR_JAVA" DriveSafTest "$TMPDIR_JAVA/SAF-TEST"` | OpenJDK 21.0.10 | `0` | **558 pass / 0 fail / 0 skip** (`test/DriveSafTest.java`): `SAF-OWN-01..04` pinned `Item` handles, `locate()` vs `ensure()`, ownership adoption/refusal with zero mutations, double-gated `clearDetailed` & `release`, oversize non-deletion, mixed `verify` deleting ONLY measured SHA-256 mismatch, transient read `IOException` preservation, rebuild, staging cleanup, typed errors, entry/byte ceilings |
+| `DriveSafDocumentsTest` (JVM) | `"$JDK/java" -cp "$TMPDIR_JAVA" DriveSafDocumentsTest` | OpenJDK 21.0.10 | `0` | **1,553 pass / 0 fail / 0 skip** (`test/DriveSafDocumentsTest.java`): `DriveSafPolicy` + `DriveSafSafAdapter` + `DriveSaf` — positive `primary:`/`XXXX-XXXX:` `ExternalStorageProvider` acceptance, 35 disallowed/malformed URI variants (downloads/media/cloud/3rd-party/unimplemented `network.awai.drive.documents`/userinfo/port/`file://`/raw & encoded `..`/NUL/control chars/backslash/malformed `%`/missing volume) all rejected with `"local-provider-required"` and **0** provider I/O calls across all 7 `DriveSaf.Tree` methods, plus all prior pinned cache/child swap, duplicate display name, symlink/virtual/null-flags/unconfirmed preservation, oversize non-deletion, and lifecycle tests |
+| `DriveSafAndroidBoundaryTest` (JVM against `test/android-stubs/`) | `"$JDK/java" -cp "$TMPDIR_BOUNDARY" network.awai.drive.DriveSafAndroidBoundaryTest src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSafDocuments.java` | OpenJDK 21.0.10 + `test/android-stubs/` | `0` | **478 pass / 0 fail / 0 skip** (`test/DriveSafAndroidBoundaryTest.java`): compiles and executes ACTUAL production `DriveSafDocuments.java` + `DriveSafSession.java` (plus `DriveSafPolicy`, `DriveSafRecord`, `DriveSaf`, `DriveSafSafAdapter`), verifying Stage 1 `acceptPicked` allowlist (`takePersistableUriPermission == 0` on disallowed authorities), `DriveSafDocuments` zero `ContentResolver`/`DocumentsContract` calls on disallowed authorities, Stage 2 tampered `awai-drive-saf.v1.json` fail-closed (`"local-provider-required"`, 0 `DocumentsContract` calls) + safe `cacheRelease` (0 `deleteDocument` calls), `confirmRegularFile` (`S_ISREG == false` for symlink/FIFO/dir, `st_size` mismatch, `null` PFD, `fstat` error, `SecurityException` → `permission-lost`, valid regular file → `true`), and `DriveSafDocuments.java` Honest Non-Goal disclosure |
 | `DriveFilesTest` (JVM) | `"$JDK/java" -cp "$TMPDIR_JAVA" DriveFilesTest "$TMPDIR_JAVA/FILES-TEST"` | OpenJDK 21.0.10 | `0` | **30 pass / 0 fail / 0 skip** (`test/DriveFilesTest.java`): local store invariants + `.awai-cache-owner.v1.json` rejected by `name()`/`resolve()` and hidden from `list()` |
-| Android Java compile-check (`javac`) | `"$JDK/javac" -cp "$ANDROID_JAR" -d "$TMPDIR_ANDROID" ...` (all 7 Android Java files) | `javac 21.0.10` + `android-37.0/android.jar` | `0` | **7 files compiled / 0 errors**: `DriveSafRecord.java`, `DriveSaf.java`, `DriveSafSafAdapter.java`, `DriveSafDocuments.java`, `DriveSafSession.java`, `DriveFiles.java`, `DriveDocuments.java` |
-| `test/saf-cache.test.mjs` (Node + clean `dist/` build) | `node --test test/saf-cache.test.mjs` | Node `v26.3.0` | `0` | **4 pass / 0 fail / 0 skip**: base64 roundtrip, op→payload mapping (including `oversize`/`oversizeNames`/`unreadable`/`preservedForeign`/`ownerPreserved`), typed-error propagation, clean `dist/` build (`node scripts/build.mjs`) verifying `dist/saf-cache.js` + `dist/release.json` SHA-256s + static ESM import graph from `dist/app.js` + direct `dist/saf-cache.js` import + isolated Node ESM load of `dist/app.js` (restoring `src-tauri/tauri.conf.json`) |
-| Full `test/*.test.mjs` (Node) | `node --test test/*.test.mjs` | Node `v26.3.0` | `0` | **45 pass / 0 fail / 4 pre-existing skips** |
+| Android Java compile-check (`javac`) | `"$JDK/javac" -cp "$ANDROID_JAR" -d "$TMPDIR_ANDROID" ...` (all 8 Android Java files) | `javac 21.0.10` + `android-37.0/android.jar` | `0` | **8 files compiled / 0 errors**: `DriveSafPolicy.java`, `DriveSafRecord.java`, `DriveSaf.java`, `DriveSafSafAdapter.java`, `DriveSafDocuments.java`, `DriveSafSession.java`, `DriveFiles.java`, `DriveDocuments.java` |
+| `test/saf-cache.test.mjs` (Node + isolated `AWAI_DRIVE_DIST_DIR` build) | `node --test test/saf-cache.test.mjs` | Node `v26.3.0` | `0` | **4 pass / 0 fail / 0 skip**: base64 roundtrip, op→payload mapping, typed-error propagation including `LOCAL_PROVIDER_REQUIRED === "local-provider-required"`, isolated `mkdtemp` `AWAI_DRIVE_DIST_DIR` build verifying `saf-cache.js` + `release.json` SHA-256s + static ESM import graph + direct `saf-cache.js` import + isolated Node ESM load of `app.js` + asserting shared `dist/` and `src-tauri/tauri.conf.json` remain untouched |
+| Full `test/*.test.mjs` (Node, default parallel) | `node --test test/*.test.mjs` | Node `v26.3.0` | `0` | **45 pass / 0 fail / 4 pre-existing skips** |
+| Full `test/*.test.mjs` (Node, serial) | `node --test --test-concurrency=1 test/*.test.mjs` | Node `v26.3.0` | `0` | **45 pass / 0 fail / 4 pre-existing skips** |
 
-Reproduce the JVM, Android compile-check, and Node checks from `tauri/`:
+Reproduce the JVM, Android boundary, Android SDK compile-check, and Node checks from `tauri/`:
 
 ```sh
 JDK=/opt/homebrew/Cellar/openjdk@21/21.0.10/bin
 ANDROID_JAR=/Users/node/Library/Android/sdk/platforms/android-37.0/android.jar
 TMPDIR_JAVA=$(mktemp -d)
+TMPDIR_BOUNDARY=$(mktemp -d)
 TMPDIR_ANDROID=$(mktemp -d)
 "$JDK/javac" -d "$TMPDIR_JAVA" \
+  src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSafPolicy.java \
   src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSafRecord.java \
   src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSaf.java \
   src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSafSafAdapter.java \
@@ -163,7 +223,19 @@ TMPDIR_ANDROID=$(mktemp -d)
 "$JDK/java" -cp "$TMPDIR_JAVA" DriveSafTest "$TMPDIR_JAVA/SAF-TEST"
 "$JDK/java" -cp "$TMPDIR_JAVA" DriveSafDocumentsTest
 "$JDK/java" -cp "$TMPDIR_JAVA" DriveFilesTest "$TMPDIR_JAVA/FILES-TEST"
+"$JDK/javac" -d "$TMPDIR_BOUNDARY" \
+  $(find test/android-stubs -name '*.java' | sort) \
+  src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSafPolicy.java \
+  src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSafRecord.java \
+  src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSaf.java \
+  src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSafSafAdapter.java \
+  src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSafDocuments.java \
+  src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSafSession.java \
+  test/DriveSafAndroidBoundaryTest.java
+"$JDK/java" -cp "$TMPDIR_BOUNDARY" network.awai.drive.DriveSafAndroidBoundaryTest \
+  src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSafDocuments.java
 "$JDK/javac" -cp "$ANDROID_JAR" -d "$TMPDIR_ANDROID" \
+  src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSafPolicy.java \
   src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSafRecord.java \
   src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSaf.java \
   src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSafSafAdapter.java \
@@ -171,19 +243,23 @@ TMPDIR_ANDROID=$(mktemp -d)
   src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSafSession.java \
   src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveFiles.java \
   src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveDocuments.java
-rm -rf "$TMPDIR_JAVA" "$TMPDIR_ANDROID"
+rm -rf "$TMPDIR_JAVA" "$TMPDIR_BOUNDARY" "$TMPDIR_ANDROID"
 node --test test/saf-cache.test.mjs
 node --test test/*.test.mjs
+node --test --test-concurrency=1 test/*.test.mjs
 ```
 
 ## Explicitly unverified
 
 - Real DocumentsUI tree picker flow, `takePersistableUriPermission`
   behaviour across providers, and grant revocation on a physical device —
-  the Android bridge (`DriveSafDocuments`, `DriveSafSession`, `DrivePlugin.kt`)
-  is compile-checked only (no Gradle/APK or `cargo build` was re-run in this
-  remediation pass); the SAF protocol state machine (`DriveSafSafAdapter`) is
-  JVM-verified via `DriveSafDocumentsTest`.
+  `DriveSafDocuments` and `DriveSafSession` are compile-checked against
+  `android-37.0/android.jar` AND JVM-tested against `test/android-stubs/` via
+  `DriveSafAndroidBoundaryTest` (478 checks), while `DrivePlugin.kt` was not
+  compiled locally (`kotlinc` absent; no Gradle/APK or `cargo build` was re-run
+  in this remediation pass); the SAF policy and protocol state machine
+  (`DriveSafPolicy`, `DriveSafSafAdapter`) are JVM-verified via
+  `DriveSafDocumentsTest`.
 - `DriveSafDocuments` against real providers: `Os.fstat(ParcelFileDescriptor)`
   behaviour on virtual/pipe FDs returned by third-party providers, MIME/extension
   handling for `.awai-cache-owner.v1.json` (`application/json`), auto-rename
@@ -206,6 +282,7 @@ node --test test/*.test.mjs
 | Acceptance scenario | Behaviour |
 | --- | --- |
 | User deny/cancel | `cache-cancelled`, no record written, nothing touched |
+| Disallowed SAF provider (`downloads.documents`, `media.documents`, `network.awai.drive.documents`, cloud/3rd-party), non-`content` scheme (`file://`), or unsafe `treeDocumentId` (`..`, `%2e%2e`, NUL, control chars, missing volume `:`) | `local-provider-required`; Stage 1 rejects before `takePersistableUriPermission` (0 grants, 0 `DocumentsContract` calls); Stage 2 rejects tampered/legacy persisted records across `cacheStatus`/`cachePut`/`cacheGet`/`cacheVerify`/`cacheClear` with 0 `DocumentsContract` calls; `cacheRelease` deletes only the local record with 0 `DocumentsContract.deleteDocument` calls |
 | Read-only grant | `persist-unsupported`, nothing stored |
 | Non-empty foreign `cache/` (missing/malformed/mismatched marker or legacy/missing local `instanceId`) | `foreign-directory-refused`, zero writes and zero deletes; `cachePick` keeps prior selection intact and releases the rejected grant; `cacheStatus` reports `state:"foreign-directory-refused"` |
 | Duplicate/non-dir/virtual `"cache"` at root, swapped pinned `cache` doc ID, swapped/renamed/moved child doc ID, missing `FLAG_SUPPORTS_DELETE`, or failed `Os.fstat` `S_ISREG` / size check | fails closed (`cache-absent` / `foreign-directory-refused`) with zero `deleteDoc` calls; pinned `cache` doc ID never rebinds |
@@ -286,6 +363,7 @@ The APK stays in the worktree under
 committed; it exceeds the Store 20 MiB ceiling like prior debug builds and
 is not a release artifact. It was built at `7d4ba63`; the record-codec
 follow-up (`4da78295`), `SAF-OWN-01`–`04` + transient-`IOException`
-remediation, and these Round 2 P1 fixes compile clean via `javac` against
-`android-37.0/android.jar` but have not been re-packaged into an APK — rebuild
-together with the device QA pass.
+remediation, Round 2 P1 fixes (`50666cd`), and these Round 3 P1/P2 fixes
+compile clean via `javac` against `android-37.0/android.jar` (all 8 Java files)
+and pass JVM boundary verification via `DriveSafAndroidBoundaryTest`, but have
+not been re-packaged into an APK — rebuild together with the device QA pass.
