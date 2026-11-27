@@ -6,15 +6,17 @@ import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import java.io.*;
 import java.util.*;
-/** DocumentsContract adapter for DriveSaf.Tree. Every call stays inside the
- *  "cache" document of the user-picked SAF tree; document ids, never display
- *  names, address entries, and the picked tree is the only URI ever touched.
- *  SAF has no atomic rename, so integrity comes from per-read SHA-256
- *  verification rather than rename atomicity. */
+/** DocumentsContract adapter for DriveSaf.Tree (SAF-OWN-01). Every call stays
+ *  inside the "cache" document of the user-picked SAF tree; document ids, never
+ *  display names, address entries, and zero files are written or deleted at the
+ *  picked root. This is an internal DocumentsContract client, not an exported
+ *  DocumentsProvider; read-only user document projection lives in DriveDocuments
+ *  and excludes .awai-cache-owner.v1.json and .pending-* staging files. */
 final class DriveSafDocuments implements DriveSaf.Tree {
  private static final String[] COLS={DocumentsContract.Document.COLUMN_DOCUMENT_ID,OpenableColumns.DISPLAY_NAME,DocumentsContract.Document.COLUMN_MIME_TYPE,OpenableColumns.SIZE};
  private final ContentResolver resolver;private final Uri tree;private String cache;
  DriveSafDocuments(ContentResolver r,Uri tree){resolver=r;this.tree=tree;}
+ static boolean isUserDocument(String name){return DriveSaf.isUserDocument(name);}
  private Uri doc(String id){return DocumentsContract.buildDocumentUriUsingTree(tree,id);}
  private Cursor query(Uri uri,String[] cols)throws IOException{
   Cursor c;try{c=resolver.query(uri,cols,null,null,null);}catch(SecurityException e){cache=null;throw new IOException("permission-lost");}
@@ -22,7 +24,7 @@ final class DriveSafDocuments implements DriveSaf.Tree {
  }
  private void drop(Uri u){try{DocumentsContract.deleteDocument(resolver,u);}catch(Exception ignore){}}
  /** Create a document and require the provider to keep the exact display name;
- *  SAF providers auto-rename on conflicts, which would break name=digest. */
+  *  SAF providers auto-rename on conflicts, which would break name=digest. */
  private Uri create(Uri parent,String mime,String name)throws IOException{
   Uri made;try{made=DocumentsContract.createDocument(resolver,parent,mime,name);}catch(SecurityException e){throw new IOException("permission-lost");}
   if(made==null)throw new IOException("cache-absent");
@@ -47,7 +49,10 @@ final class DriveSafDocuments implements DriveSaf.Tree {
   }
   String root=DocumentsContract.getTreeDocumentId(tree);
   try(Cursor c=query(DocumentsContract.buildChildDocumentsUriUsingTree(tree,root),COLS)){
-   while(c.moveToNext())if(DriveSaf.DIR.equals(c.getString(1))&&DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(2))){cache=c.getString(0);return;}
+   while(c.moveToNext())if(DriveSaf.DIR.equals(c.getString(1))){
+    if(DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(2))){cache=c.getString(0);return;}
+    throw new IOException("foreign-directory-refused");
+   }
   }
   cache=DocumentsContract.getDocumentId(create(doc(root),DocumentsContract.Document.MIME_TYPE_DIR,DriveSaf.DIR));
  }
@@ -76,7 +81,8 @@ final class DriveSafDocuments implements DriveSaf.Tree {
  }
  public void create(String name,byte[] data)throws IOException{
   ensure();if(id(name)!=null)throw new IOException("file-exists");
-  Uri made=create(doc(cache),"application/octet-stream",name);
+  String mime=DriveSaf.ownerFile(name)?"application/json":"application/octet-stream";
+  Uri made=create(doc(cache),mime,name);
   try(OutputStream out=resolver.openOutputStream(made)){
    if(out==null){drop(made);throw new IOException("storage-unavailable");}
    out.write(data);

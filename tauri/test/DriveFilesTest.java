@@ -2,7 +2,11 @@ import network.awai.drive.DriveFiles;import java.io.*;import java.nio.file.*;imp
 public class DriveFilesTest{
  static int checks=0;static void yes(boolean b){checks++;if(!b)throw new AssertionError("check "+checks);}static void reject(Callable<?> f)throws Exception{checks++;try{f.call();throw new AssertionError("accepted forbidden input");}catch(IOException expected){}}
  public static void main(String[] args)throws Exception{Path base=Path.of(args[0]);Files.createDirectories(base);DriveFiles d=new DriveFiles(base.resolve("store").toFile());
- for(String n:new String[]{"..","a/b","a\\b","bad\nname","bad\0name",".pending-test"})reject(()->DriveFiles.name(n));
+ for(String n:new String[]{"..","a/b","a\\b","bad\nname","bad\0name",".pending-test",".awai-cache-owner.v1.json"})reject(()->DriveFiles.name(n));
+ Files.writeString(base.resolve("store/.awai-cache-owner.v1.json"),"{}");
+ reject(()->d.resolve(".awai-cache-owner.v1.json"));
+ yes(Arrays.stream(d.list("")).noneMatch(f->f.getName().equals(".awai-cache-owner.v1.json")));
+ Files.delete(base.resolve("store/.awai-cache-owner.v1.json"));
  reject(()->d.resolve("../escape"));reject(()->d.resolve("/absolute"));d.mkdir("","資料");
  byte[] bytes=new byte[1024*1024+13];new Random(7).nextBytes(bytes);InputStream bounded=new ByteArrayInputStream(bytes){public synchronized int read(byte[] b,int o,int n){if(n>65536)throw new AssertionError("unbounded copy");return super.read(b,o,n);}};
  String h=d.copy("資料","test.bin",bounded,bytes.length);yes(h.equals(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes))));yes(Arrays.equals(Files.readAllBytes(d.resolve("資料/test.bin").toPath()),bytes));

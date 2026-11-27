@@ -28,6 +28,21 @@ export function decodeBase64(text){
  if(o!==out.length)throw Error("invalid-base64");
  return out;
 }
+export const SAF_CACHE_ERRORS=Object.freeze({
+ CANCELLED:"cache-cancelled",
+ ABSENT:"cache-absent",
+ PERMISSION_LOST:"permission-lost",
+ PERSIST_UNSUPPORTED:"persist-unsupported",
+ INVALID_RECORD:"invalid-saf-record",
+ INVALID_BYTES:"invalid-bytes",
+ BLOB_ABSENT:"blob-absent",
+ CORRUPT:"cache-corrupt",
+ SHA_MISMATCH:"sha-mismatch",
+ LIMIT:"cache-limit",
+ ENTRY_LIMIT:"entry-limit",
+ STORAGE_UNAVAILABLE:"storage-unavailable",
+ FOREIGN_DIRECTORY_REFUSED:"foreign-directory-refused",
+});
 export function createSafCache(call){
  return {
   pick:()=>call("cachePick"),
