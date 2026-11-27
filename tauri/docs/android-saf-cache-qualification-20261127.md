@@ -45,7 +45,8 @@ revision). Parent: AWAI-4118; scope fixed by the AWAI-4123 owner comment of
 
 | Check | Result and coverage |
 | --- | --- |
-| DriveSaf policy (JVM) | 98 checks pass in `test/DriveSafTest.java` against a file-backed `Tree`: name/digest gates, tree-level path confinement (traversal/absolute/nested rejected), write→readback SHA-256 match, idempotent `present`, corrupt/truncated/oversize blob detection with delete-on-proof, directory-squat rejection, `inspect(verify)` reporting without deleting, `rebuilt` replacement, staging cleanup on mid-write failure, transient read failure preserving data, `permission-lost`/`cache-absent` typed errors leaving state untouched, media-cycle rebuild from re-fetch source, entry/byte ceilings, `clear` preserving foreign files |
+| DriveSaf policy (JVM) | 110 checks pass in `test/DriveSafTest.java` against a file-backed `Tree`: name/digest gates, tree-level path confinement (traversal/absolute/nested rejected), write→readback SHA-256 match, idempotent `present`, corrupt/truncated/oversize blob detection with delete-on-proof, directory-squat rejection, `inspect(verify)` reporting without deleting, `rebuilt` replacement, staging cleanup on mid-write failure, transient read failure preserving data, `permission-lost`/`cache-absent`/`storage-unavailable` typed errors leaving state untouched, media-cycle rebuild from re-fetch source, a sibling internal store (drive-local-v1/vault analog) byte-identical across permission loss and media absence, entry/byte ceilings, `clear` preserving foreign files |
+| SAF record codec (JVM) | 52 checks pass in `test/DriveSafRecordTest.java`: encode→decode roundtrip, whitespace/key-order tolerance, JSON escape handling, strict `invalid-saf-record` rejection of malformed/oversize/non-`content://` records. `remember()` commits the new record before releasing the prior grant, so a failed write leaves the previous selection usable; `cacheRelease` deletes even a corrupt record |
 | DriveFiles regression (JVM) | 27 checks pass unchanged |
 | JS binding + node suite | `test/saf-cache.test.mjs` 3 tests pass (base64 roundtrip, op→payload mapping, typed-error propagation); full `npm test` 44 pass / 4 pre-existing skips; `npm run build` passes |
 | Android debug APK | `tauri android build --apk --target aarch64 --debug` passes; Kotlin+Java compile clean, development-signed APK produced and `apksigner verify` passes |
@@ -55,8 +56,10 @@ Reproduce the JVM checks from `tauri/`:
 ```sh
 javac -d .agent-output/drive-java \
   src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSaf.java \
-  test/DriveSafTest.java
+  src-tauri/gen/android/app/src/main/java/network/awai/drive/DriveSafRecord.java \
+  test/DriveSafTest.java test/DriveSafRecordTest.java
 java -cp .agent-output/drive-java DriveSafTest .agent-output/NEW-SAF-TEST
+java -cp .agent-output/drive-java DriveSafRecordTest
 ```
 
 ## Explicitly unverified
@@ -89,6 +92,46 @@ java -cp .agent-output/drive-java DriveSafTest .agent-output/NEW-SAF-TEST
 | Unexpected files in `cache/` | counted in `unexpected`, never served, never deleted by `cacheClear` |
 | Network loss | no claim change: status never reports synced/offline-available; only digest-verified bytes are returned |
 
+## Device QA (requires a physical device — pending)
+
+Run on a device with the debug APK installed (`adb install -r`). Each step
+lists the manual action and the expected result; any deviation is a defect
+against this slice, not a fixture gap.
+
+1. **DocumentsUI tree picker.** Trigger `cachePick` (via `window.AwaiDriveSaf.pick()`
+   in WebView debug or a future UI hook). In DocumentsUI select a folder on
+   internal storage and on removable media if present; grant access.
+   Expected: `cacheStatus` reports `picked:true, state:"ready"`; a
+   `cache/` directory appears inside the picked tree and nowhere else;
+   `noBackupFilesDir/awai-drive-saf.v1.json` contains only the tree URI.
+2. **Persistable grant.** Force-stop and relaunch the app.
+   Expected: `cacheStatus` still `ready` — the grant persisted; ops succeed
+   without re-picking.
+3. **Cancel/deny.** Trigger `cachePick`, press back or deny the prompt.
+   Expected: `cache-cancelled` error; `cacheStatus` unchanged (previous
+   record intact, or `absent` if none); nothing written to any tree.
+4. **Real provider write path.** `cachePut` a small blob, pull-to-refresh
+   DocumentsUI on the picked tree.
+   Expected: blob visible as `<64-hex>` under `cache/`; `cacheGet` returns
+   identical bytes; `cacheVerify` reports `clean:true`.
+5. **Media eject.** With the tree on removable media, `cachePut`, then
+   physically remove the media.
+   Expected: ops return `cache-absent`/status `unavailable` (typed, never a
+   crash or data-loss error); internal files unaffected; reinsert →
+   `cacheVerify` shows blobs gone or `cache-absent` → cache treated as
+   absent and rebuildable from the re-fetch source.
+6. **Permission revocation.** Revoke the grant via system Settings →
+   Apps → Drive → Permissions (or forget the USB device authorization).
+   Expected: `permission-lost` typed error; `cacheStatus`
+   `state:"permission-lost"`; internal store untouched; re-pick recovers.
+7. **Reboot persistence loss.** Reboot the device; check whether the
+   persistable grant survived (expected on most providers; if not,
+   `permission-lost` and re-pick is the designed recovery — record which
+   providers behave which way).
+8. **Corrupt blob on device.** Edit a cached blob on the media side
+   (e.g. via a file manager) then `cacheGet`.
+   Expected: `cache-corrupt`, blob removed; `cachePut` rebuilds (`rebuilt`).
+
 ## Artifacts
 
 | File | Bytes | SHA256 |
@@ -100,4 +143,7 @@ Development signer certificate SHA-256:
 The APK stays in the worktree under
 `src-tauri/gen/android/app/build/outputs/apk/universal/debug/` and is not
 committed; it exceeds the Store 20 MiB ceiling like prior debug builds and
-is not a release artifact.
+is not a release artifact. It was built at `7d4ba63`; the record-codec
+follow-up (DriveSafRecord extraction, commit-then-release `remember()`)
+compiles clean via `:app:compileUniversalDebugJavaWithJavac` but has not
+been re-packaged — rebuild together with the device QA pass.

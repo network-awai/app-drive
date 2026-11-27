@@ -91,6 +91,22 @@ public class DriveSafTest{
   Files.createDirectories(f.tree); // media returns empty: cache rebuilds from re-fetch source
   rep=DriveSaf.inspect(f,false);eq(rep.blobs,0);eq(rep.clean,true);
   eq(DriveSaf.put(f,h2,b2),"stored");eq(sha(DriveSaf.get(f,h2)),h2);
+  // Internal unsynced state is never a cache source or casualty: a sibling
+  // store standing in for drive-local-v1/vault stays byte-identical across
+  // permission loss and media absence.
+  Path internal=base.resolve("internal");Files.createDirectories(internal);Files.createDirectories(internal.resolve("nested"));
+  Files.write(internal.resolve("unsynced.bin"),blob);Files.write(internal.resolve("nested/wal.bin"),b2);
+  f.revoked=true;
+  eq(code(()->DriveSaf.inspect(f,false)),"permission-lost");
+  eq(code(()->DriveSaf.put(f,h2,b2)),"permission-lost");
+  eq(code(()->DriveSaf.get(f,h2)),"permission-lost");
+  f.revoked=false;
+  deleteTree(f.tree);
+  eq(code(()->DriveSaf.inspect(f,false)),"cache-absent");
+  eq(code(()->DriveSaf.get(f,h2)),"cache-absent");
+  Files.createDirectories(f.tree);DriveSaf.inspect(f,false);
+  yes(Arrays.equals(Files.readAllBytes(internal.resolve("unsynced.bin")),blob));
+  yes(Arrays.equals(Files.readAllBytes(internal.resolve("nested/wal.bin")),b2));
   // Entry and byte ceilings bound the cache; clear reclaims cache-owned files.
   DriveSaf.clear(f);
   for(int i=0;i<DriveSaf.MAX_ENTRIES;i++)f.raw(String.format("%064x",i),new byte[0]);

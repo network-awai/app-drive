@@ -10,32 +10,32 @@ import java.io.*;
  *  URI the user chose. The tree receives re-fetchable ciphertext under cache/;
  *  lists, history, WAL, keys and unsynced protection copies stay internal. */
 final class DriveSafSession {
- private static final String SCHEMA="awai.drive.saf.v1";
  private static final int GRANTS=Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
  private final Context context;private final AtomicFile record;
  DriveSafSession(Context c){context=c;record=new AtomicFile(new File(c.getNoBackupFilesDir(),"awai-drive-saf.v1.json"));}
- private JSONObject read()throws Exception{
+ /** "" means no record; malformed content is invalid-saf-record. */
+ private String saved()throws IOException{
   try(FileInputStream in=record.openRead()){
    long size=in.getChannel().size();
-   if(size<=0||size>4096)throw new IOException("invalid-saf-record");
+   if(size<=0||size>DriveSafRecord.MAX_BYTES)throw new IOException("invalid-saf-record");
    byte[] b=new byte[(int)size];new DataInputStream(in).readFully(b);
-   JSONObject j=new JSONObject(new String(b,"UTF-8"));
-   if(!SCHEMA.equals(j.optString("schema")))throw new IOException("invalid-saf-record");
-   return j;
-  }catch(FileNotFoundException e){return new JSONObject();}
+   return DriveSafRecord.decode(b);
+  }catch(FileNotFoundException e){return "";}
  }
- private void write(JSONObject j)throws Exception{
-  if(j.toString().length()>4096)throw new IOException("invalid-saf-record");
+ private void save(String tree)throws Exception{
   FileOutputStream out=record.startWrite();
-  try{out.write(j.toString().getBytes("UTF-8"));record.finishWrite(out);}
+  try{out.write(DriveSafRecord.encode(tree));record.finishWrite(out);}
   catch(IOException e){record.failWrite(out);throw e;}
  }
+ /** Commit-then-release: the new record is durable before the prior grant is
+  *  dropped, so a failed write leaves the previous selection fully usable. */
  void remember(Uri tree)throws Exception{
-  JSONObject prior=read();String old=prior.optString("tree");
-  if(!old.isEmpty()&&!old.equals(tree.toString())){
-   try{context.getContentResolver().releasePersistableUriPermission(Uri.parse(old),GRANTS);}catch(Exception ignore){}
-  }
-  write(new JSONObject().put("schema",SCHEMA).put("tree",tree.toString()));
+  String prior;
+  try{prior=saved();}catch(Exception e){prior="";} // corrupt prior: overwritten below; its grant URI is unknowable
+  String next=tree.toString();
+  if(prior.equals(next))return;
+  save(next);
+  if(!prior.isEmpty())try{context.getContentResolver().releasePersistableUriPermission(Uri.parse(prior),GRANTS);}catch(Exception ignore){}
  }
  private boolean granted(Uri u){
   for(UriPermission p:context.getContentResolver().getPersistedUriPermissions())
@@ -44,7 +44,7 @@ final class DriveSafSession {
  }
  private Uri tree()throws IOException{
   String s;
-  try{s=read().optString("tree");}catch(Exception e){throw new IOException("invalid-saf-record");}
+  try{s=saved();}catch(Exception e){throw new IOException("invalid-saf-record");}
   if(s.isEmpty())throw new IOException("cache-absent");
   Uri u=Uri.parse(s);
   if(!granted(u))throw new IOException("permission-lost");
@@ -59,10 +59,10 @@ final class DriveSafSession {
  *  reachable and cache/ scans cleanly; per-blob digests are only checked by
  *  cacheGet on read and by the explicit cacheVerify op. */
  JSONObject status()throws Exception{
-  JSONObject r;
-  try{r=read();}catch(Exception e){return new JSONObject().put("picked",false).put("state","invalid-record");}
-  if(r.optString("tree").isEmpty())return new JSONObject().put("picked",false).put("state","absent");
-  Uri u=Uri.parse(r.getString("tree"));
+  String s;
+  try{s=saved();}catch(Exception e){return new JSONObject().put("picked",false).put("state","invalid-record");}
+  if(s.isEmpty())return new JSONObject().put("picked",false).put("state","absent");
+  Uri u=Uri.parse(s);
   if(!granted(u))return new JSONObject().put("picked",true).put("state","permission-lost");
   try{
    DriveSaf.Report rep=DriveSaf.inspect(new DriveSafDocuments(context.getContentResolver(),u),false);
@@ -106,10 +106,9 @@ final class DriveSafSession {
    }
    case "cacheClear":return new JSONObject().put("deleted",DriveSaf.clear(open()));
    case "cacheRelease":{
-    JSONObject r=read();String s=r.optString("tree");
-    if(!s.isEmpty()){
-     try{context.getContentResolver().releasePersistableUriPermission(Uri.parse(s),GRANTS);}catch(Exception ignore){}
-    }
+    String s="";
+    try{s=saved();}catch(Exception ignore){} // release must always delete, even a corrupt record
+    if(!s.isEmpty())try{context.getContentResolver().releasePersistableUriPermission(Uri.parse(s),GRANTS);}catch(Exception ignore){}
     record.delete();
     return new JSONObject().put("released",true);
    }
