@@ -6,6 +6,7 @@ import './core.js';
 import {translator,messages} from './i18n.js';
 import {searchFiles,searchCatalog,fileKind} from './search.js';
 import {createDriveAccountLink} from './account-link.js';
+import {createSafCache} from './saf-cache.js';
 import {runtimeFor,accountOperation} from './sync-contract.js';
 import {accountLinkEnabled} from './sync-config.js';
 const {lang,t,bytes}=translator(navigator.language);document.documentElement.lang=lang;document.querySelectorAll('[data-i18n]').forEach(n=>n.textContent=t(n.dataset.i18n));document.querySelectorAll('[data-i18n-aria]').forEach(n=>n.setAttribute('aria-label',t(n.dataset.i18nAria)));
@@ -177,6 +178,7 @@ $('import').onclick=()=>task(async()=>{message(t('status.importing'));await call
 function edit(op){mode=op;$('title').textContent=t(op==='mkdir'?'folder.create':'file.note');$('content-label').hidden=op==='mkdir';$('name').value='';$('content').value='';$('form-error').textContent='';$('edit').showModal();$('name').focus();}
 $('folder').onclick=()=>edit('mkdir');$('note').onclick=()=>edit('createText');$('cancel').onclick=()=>$('edit').close();
 $('entry').onsubmit=e=>{e.preventDefault();if(!core.validName($('name').value)){$('form-error').textContent=t('error.invalid-name');return;}task(async()=>{await call(mode,{name:$('name').value,text:$('content').value});$('edit').close();await list();message(t('status.saved'));});};
+window.AwaiDriveSaf=createSafCache(call);
 await task(async()=>{await host.initialize();await list();});
 
 const showGrants = mountWnfsSharing($('sync').parentElement, encryptedSync, task, encryptedSync.sharingEnabled, list);
